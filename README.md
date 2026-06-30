@@ -37,7 +37,7 @@ cp config.example.yaml config.yaml
 | `review/Step7-{Youro\|RonChamp}-周数据总览-MMDD-MMDD.csv` | **步骤⑦** 总览（Youro→Sheet 3；RonChamp→Sheet 1，均与 Step6 同店同源） |
 | `review/Step6-店铺汇总-MMDD-MMDD.csv` | **步骤⑥** Sheet 1 双店指标（A03/A04 基础+运营 + 周新客订单段 + **截止意向按店**） |
 
-**默认只出 CSV**，周分析 xlsx 由人工粘贴更新。需要脚本写回 xlsx 时使用 `--write-xlsx`。
+**默认只出 CSV**，周分析 xlsx 由人工粘贴更新（脚本不写回 xlsx）。
 
 **店铺判定**：以 A02「所属店铺」（屿路 / 镕川）为准，对应 Youro Sheet 6 / RonChamp Sheet 4。
 
@@ -73,7 +73,6 @@ cp config.example.yaml config.yaml
 
 ```bash
 python generate_weekly_new_orders.py                  # CSV + 转化表（默认）
-python generate_weekly_new_orders.py --write-xlsx     # 额外写回周分析 xlsx
 python generate_weekly_new_orders.py --no-conversion  # 跳过 2.新客转化表
 python generate_weekly_new_orders.py -c other.yaml
 ```

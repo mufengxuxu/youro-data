@@ -29,7 +29,7 @@ python generate_weekly_new_orders.py
 可选：
 
 ```bash
-python generate_weekly_new_orders.py --write-xlsx   # 仅写回 6./4.周新客订单表
+python generate_weekly_new_orders.py
 python generate_weekly_new_orders.py --no-conversion
 ```
 
@@ -102,7 +102,7 @@ python generate_weekly_new_orders.py --no-conversion
 2. ✅ 源 Excel（A02/A03/A04/A05/A07/A060x）已维护到当周末  
 3. ⚠️ 仍需 **核对 CSV** + **粘贴两个 xlsx** + RonChamp **注销账号** 手填  
 
-脚本**不会**自动填完整 xlsx（除非对周新客表使用 `--write-xlsx`，且仅 6./4. 订单 Sheet）。
+脚本**只出 CSV**，周分析 xlsx **全部人工粘贴**（见 §4）。
 
 ---
 

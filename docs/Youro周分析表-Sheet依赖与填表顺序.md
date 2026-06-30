@@ -122,7 +122,7 @@ flowchart TB
 | 店铺汇总 Step⑥ | ✅ | `Step6-店铺汇总` |
 | 总览 Step⑦ | ✅ | `Step7-Youro` / `Step7-RonChamp` |
 | 交叉核对 | ✅ | `流量交叉核对-*` / `渠道未归类` 等 |
-| xlsx 全自动 | ❌ | 默认 CSV；`--write-xlsx` 仅 6./4. 订单 Sheet |
+| xlsx 全自动 | ❌ | 仅 CSV；人工粘贴各 Sheet |
 | RonChamp 注销账号 | ❌ | 国际站后台手填 |
 
 ---

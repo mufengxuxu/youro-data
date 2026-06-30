@@ -1712,52 +1712,6 @@ def generate_step7_overview_csv(
     return path
 
 
-def patch_weekly_xlsx(
-    xlsx_path: Path,
-    new_rows: list[list[Any]],
-    period: str,
-    sheet_prefix: str | None = None,
-) -> None:
-    """Append/replace rows for target period in weekly new-order sheet."""
-    try:
-        import openpyxl
-    except ImportError:
-        print("  skip xlsx writeback: pip install openpyxl", file=sys.stderr)
-        return
-
-    wb = openpyxl.load_workbook(xlsx_path)
-    if sheet_prefix:
-        sheet_name = next(
-            (
-                n
-                for n in wb.sheetnames
-                if n.startswith(sheet_prefix) or (sheet_prefix in n and "新客订单" in n)
-            ),
-            None,
-        )
-    else:
-        sheet_name = next((n for n in wb.sheetnames if "新客订单" in n), None)
-    if not sheet_name:
-        print(f"  skip xlsx writeback: sheet not found (prefix={sheet_prefix})", file=sys.stderr)
-        return
-    ws = wb[sheet_name]
-
-    to_delete = []
-    for r in range(4, ws.max_row + 1):
-        val = ws.cell(r, 1).value
-        if val and str(val).strip() == period:
-            to_delete.append(r)
-    for r in reversed(to_delete):
-        ws.delete_rows(r, 1)
-
-    start = ws.max_row + 1
-    for i, row in enumerate(new_rows):
-        for j, val in enumerate(row, 1):
-            ws.cell(start + i, j, val)
-    wb.save(xlsx_path)
-    print(f"  wrote {len(new_rows)} rows to {xlsx_path.name} ({sheet_name})")
-
-
 def _sales_sort_key(sales: str, order_list: list[str]) -> tuple[int, str]:
     try:
         return (order_list.index(sales), sales)
@@ -2247,7 +2201,6 @@ def process_week_order(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate weekly new-customer order rows")
     parser.add_argument("-c", "--config", default="config.yaml")
-    parser.add_argument("--write-xlsx", action="store_true", help="Write back to weekly xlsx (default: CSV only)")
     parser.add_argument("--no-conversion", action="store_true", help="Skip monthly conversion table")
     args = parser.parse_args()
 
@@ -2377,22 +2330,6 @@ def main() -> int:
         print(f"  ⚠ Youro shop stats empty — check {a03_path.name} › {SHOP_MONTH_SHEET.format(month=week_end.month)}")
     if not load_shop_week_stats(a04_path, week_begin, week_end):
         print(f"  ⚠ RonChamp shop stats empty — check {a04_path.name} › {SHOP_MONTH_SHEET.format(month=week_end.month)}")
-
-    if args.write_xlsx:
-        youro_xlsx = paths.get("weekly_youro_xlsx") or paths.get("weekly_xlsx")
-        if youro_xlsx:
-            xlsx = data_dir / youro_xlsx
-            if xlsx.exists():
-                patch_weekly_xlsx(xlsx, youro_rows, period, sheet_prefix="6")
-            else:
-                print(f"  Youro weekly xlsx not found: {xlsx}")
-        ron_xlsx = paths.get("weekly_ronchamp_xlsx")
-        if ron_xlsx:
-            xlsx = data_dir / ron_xlsx
-            if xlsx.exists():
-                patch_weekly_xlsx(xlsx, ronchamp_rows, period, sheet_prefix="4")
-            else:
-                print(f"  Ronchamp weekly xlsx not found: {xlsx}")
 
     if not args.no_conversion:
         month_begin, month_end, title = conversion_range(cfg)

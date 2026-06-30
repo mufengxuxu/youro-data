@@ -17,7 +17,7 @@ conversion:
 paths:
   data_dir: .
   brands: brands.yaml
-  # 周分析 xlsx 仅在使用 --write-xlsx 时需要；默认只出 CSV，由人工粘贴
+  # 周分析 xlsx 文件名（可选，本地参考；脚本不写回）
   # weekly_youro_xlsx: "2026年Youro运营数据周分析表（6.22—6.28）.xlsx"
   # weekly_ronchamp_xlsx: "2026年Ronchamp运营数据周分析表（6.22—6.28）.xlsx"
   a02: A02-财务收支.xlsx
