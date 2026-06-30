@@ -42,7 +42,17 @@ cp config.example.yaml config.yaml
 
 **转化表日期**：自动取 `week.end_date` 所在月的 **1 日 ~ week.end_date**（例：周次 6.22—6.28 → 转化表标题 `6.1 - 6.28`）。
 
-**转化表个案**：不改源 Excel；非共性订单在 `exceptions.yaml` 按 `order_no` 登记（见 [`docs/业务规则汇总.md`](docs/业务规则汇总.md) §11）。
+**转化表个案**：见 [`docs/业务规则汇总.md`](docs/业务规则汇总.md) §12。
+
+## 每周流程（下周起）
+
+1. 更新 `config.yaml` 周次 + Cookie；源 Excel 维护到周末  
+2. `python generate_weekly_new_orders.py` → 出齐 `review/` 全部 CSV  
+3. 核对交叉核对 / 未归类 / 采购 / 品牌  
+4. 按 **[`docs/每周运营SOP.md`](docs/每周运营SOP.md)** 粘贴 Youro + RonChamp 两个 xlsx  
+5. RonChamp Sheet1 手填 **买家周注销账号**（常为 0）
+
+> **只跑脚本即可出数**；粘贴 xlsx 与注销账号仍需人工。
 
 ## 数据流
 
