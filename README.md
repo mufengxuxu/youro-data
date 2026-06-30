@@ -21,6 +21,7 @@ cp config.example.yaml config.yaml
 | `review/6.周新客订单表-Youro.csv` | 屿路当周首单（22 列） |
 | `review/4.周新客订单表-RonChamp.csv` | 镕川当周首单（22 列） |
 | `review/2.新客转化表.csv` | **当月累计**新客转化（月初 ~ `week.end_date`） |
+| `review/渠道未归类.csv` | 无流量且非明确「其他」的首单，计入 C 但不进 P 列 |
 | `review/流量交叉核对-汇总.csv` | A05 vs A060x 新流量数量交叉对比（按店铺/业务员） |
 | `review/流量交叉核对-明细.csv` | 两边不一致的客户明细（仅A05/仅A060x/字段差） |
 | `review/采购核对.csv` | API vs A02 采购金额对比 |

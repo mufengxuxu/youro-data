@@ -493,18 +493,42 @@ def is_l1plus(level: Any) -> bool:
     return s not in ("", "L0") and s != "L1-"
 
 
-def classify_channel(traffic: "TrafficRow | None") -> str:
-    if traffic is None:
+OTHER_CHANNEL_KEYWORDS = ("转介绍", "微信", "公海", "客户介绍", "介绍", "老客户")
+
+
+def _text_has_other_keyword(text: str) -> bool:
+    return any(kw in str(text or "") for kw in OTHER_CHANNEL_KEYWORDS)
+
+
+def is_explicit_other_channel(traffic: "TrafficRow | None", sale: dict | None = None) -> bool:
+    if traffic:
+        combined = f"{traffic.source or ''}{traffic.traffic_type or ''}"
+        if _text_has_other_keyword(combined):
+            return True
+    if sale:
+        for field in ("salesRemark", "remark", "receiptRemark"):
+            if _text_has_other_keyword(str(sale.get(field) or "")):
+                return True
+    return False
+
+
+def classify_channel(traffic: "TrafficRow | None", sale: dict | None = None) -> str:
+    """tm / rfq / other（明确非 TM 来源）/ unclassified（无流量且非明确其他）."""
+    if traffic:
+        combined = f"{traffic.source or ''}{traffic.traffic_type or ''}"
+        if _text_has_other_keyword(combined):
+            return "other"
+        t = str(traffic.traffic_type or "").upper()
+        s = str(traffic.source or "").upper()
+        if "RFQ" in t or "RFQ" in s:
+            return "rfq"
+        if t in ("TM", "询盘", "R-TM") or "TM" in t or "询盘" in t:
+            return "tm"
+        if traffic.source or traffic.traffic_type:
+            return "tm"
+    if is_explicit_other_channel(traffic, sale):
         return "other"
-    t = str(traffic.traffic_type or "").upper()
-    s = str(traffic.source or "").upper()
-    if "RFQ" in t or "RFQ" in s:
-        return "rfq"
-    if t in ("TM", "询盘", "R-TM") or "TM" in t or "询盘" in t:
-        return "tm"
-    if traffic.source or traffic.traffic_type:
-        return "tm"
-    return "other"
+    return "unclassified"
 
 
 def resolve_store(a02: A02OrderRow | None, sale: dict) -> str:
@@ -518,12 +542,17 @@ def resolve_store(a02: A02OrderRow | None, sale: dict) -> str:
 
 @dataclass
 class OrderMetrics:
+    order_no: str
     store: str
     sales: str
     channel: str
     payment_rmb: float
     gross: float | None
     margin: float | None
+    customer: str = ""
+    order_date: str = ""
+    traffic_file: str = ""
+    traffic_source: str = ""
 
 
 def compute_order_metrics(
@@ -540,8 +569,20 @@ def compute_order_metrics(
     gross = float(row[16]) if row[16] != "" else None
     margin = float(row[17]) if row[17] != "" else None
     store = resolve_store(a02, sale)
-    channel = classify_channel(traffic)
-    return OrderMetrics(store, sales, channel, payment_rmb, gross, margin)
+    channel = classify_channel(traffic, sale)
+    return OrderMetrics(
+        order_no=str(sale.get("orderNo", "")),
+        store=store,
+        sales=sales,
+        channel=channel,
+        payment_rmb=payment_rmb,
+        gross=gross,
+        margin=margin,
+        customer=str(sale.get("customerName", "")),
+        order_date=str(sale.get("orderDate", ""))[:10],
+        traffic_file=traffic.file if traffic else "",
+        traffic_source=f"{traffic.source or ''}/{traffic.traffic_type or ''}" if traffic else "",
+    )
 
 
 CONVERSION_HEADERS = [
@@ -560,6 +601,20 @@ WEEKLY_HEADERS = [
     "其它运输运费", "物流方式", "初始运费", "毛利润（人民币）", "毛利率",
     "流量添加日期", "流量来源", "咨询品类", "成交产品",
 ]
+
+
+@dataclass
+class ChannelReview:
+    order_no: str
+    store: str
+    sales: str
+    customer: str
+    order_date: str
+    payment_rmb: float
+    gross: float | None
+    traffic_file: str
+    traffic_source: str
+    note: str
 
 
 @dataclass
@@ -670,10 +725,9 @@ def build_row(
             margin = a02.gross_margin
 
     traffic_type = traffic.traffic_type if traffic else ""
-    if not traffic:
-        traffic_type = "转介绍"
-    elif not traffic_type:
+    if not traffic_type and traffic:
         traffic_type = traffic.source
+    # 无流量匹配时不默认填「转介绍」；仅 classify_channel=other 时在转化逻辑中处理
     category = traffic.category if traffic else ""
     add_serial = to_excel_serial(traffic.add_date) if traffic and traffic.add_date else ""
 
@@ -1078,7 +1132,7 @@ def generate_conversion_table(
     brands: dict,
     cfg: dict,
     api: YouroApi,
-) -> list[list[Any]]:
+) -> tuple[list[list[Any]], list[OrderMetrics]]:
     conv = cfg.get("conversion") or {}
     month_begin, month_end, _ = conversion_range(cfg)
     sales_map = cfg.get("sales_name_map", {})
@@ -1125,6 +1179,7 @@ def generate_conversion_table(
             tm = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "tm"]
             rfq = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "rfq"]
             other = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "other"]
+            all_deals = [m for m in metrics if m.store == store and m.sales == sales]
 
             tm_amt = sum(m.payment_rmb for m in tm)
             rfq_amt = sum(m.payment_rmb for m in rfq)
@@ -1134,7 +1189,7 @@ def generate_conversion_table(
             other_gross = sum(m.gross or 0 for m in other) if other else None
 
             g, l_cnt, p = len(tm), len(rfq), len(other)
-            c = g + l_cnt + p
+            c = len(all_deals)
 
             row = [
                 label if first_in_group else "",
@@ -1172,7 +1227,8 @@ def generate_conversion_table(
                     totals[key] += float(val)
 
     total_row = [
-        "总计", "", count_totals["G"] + count_totals["L"] + count_totals["P"],
+        "总计", "",
+        sum(1 for m in metrics),
         count_totals["D"] or "", count_totals["E"] or "", _ratio(count_totals["E"], count_totals["D"]),
         count_totals["G"] or "", _ratio(count_totals["G"], count_totals["D"]),
         round(totals["I"], 2) if totals["I"] else "",
@@ -1189,7 +1245,8 @@ def generate_conversion_table(
         "",
     ]
     rows_out.append(total_row)
-    return rows_out
+    unclassified = [m for m in metrics if m.channel == "unclassified"]
+    return rows_out, unclassified
 
 
 def process_week_order(
@@ -1308,11 +1365,35 @@ def main() -> int:
         mb, me = month_begin.isoformat(), month_end.isoformat()
         print(f"\nGenerating conversion table {conversion_title_full(title)}...")
         month_sales = api.list_sales_orders(mb, me)
-        conversion_rows = generate_conversion_table(
+        conversion_rows, unclassified = generate_conversion_table(
             month_sales, a02_match, traffic_rows, brands, cfg, api
         )
         write_conversion_csv(out_dir / "2.新客转化表.csv", title, conversion_rows)
         print(f"  {out_dir / '2.新客转化表.csv'} ({len(conversion_rows)} rows, {mb} ~ {me})")
+        write_review_csv(
+            out_dir / "渠道未归类.csv",
+            [
+                "order_no", "store", "sales", "customer", "order_date",
+                "payment_rmb", "gross", "traffic_file", "traffic_source", "note",
+            ],
+            [
+                ChannelReview(
+                    order_no=m.order_no,
+                    store=store_to_label(m.store),
+                    sales=m.sales,
+                    customer=m.customer,
+                    order_date=m.order_date,
+                    payment_rmb=m.payment_rmb,
+                    gross=m.gross,
+                    traffic_file=m.traffic_file,
+                    traffic_source=m.traffic_source,
+                    note="无新流量匹配，未归入TM/RFQ/其他，请人工确认渠道",
+                )
+                for m in unclassified
+            ],
+        )
+        if unclassified:
+            print(f"  {out_dir / '渠道未归类.csv'} ({len(unclassified)} orders — 计入总成交C，不进其他P列)")
 
         traffic_summaries, traffic_details = compare_traffic_cross(
             traffic_rows, month_begin, month_end, cfg.get("sales_name_map", {})
