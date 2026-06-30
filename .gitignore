@@ -1,0 +1,23 @@
+# curl 示例（含 session cookie，勿提交）
+curl-*.sh
+
+# 本地配置（含 JSESSIONID）
+config.yaml
+
+# Excel 数据文件
+*.xlsx
+*.xls
+*.xlsm
+~$*
+
+# 脚本生成输出
+review/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

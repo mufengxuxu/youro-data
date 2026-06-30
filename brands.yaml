@@ -1,0 +1,51 @@
+# 型号前缀 → 品牌（productName 中匹配，大小写不敏感）
+prefixes:
+  "6SL": Siemens
+  "6ES": Siemens
+  "6AV": Siemens
+  "6EP": Siemens
+  "6GK": Siemens
+  "NXBLE": CHINT
+  "AF26": ABB
+  "VFD": Delta
+  "JW2": TENGEN
+  "SM6000": IFM
+
+# 关键词 → 品牌
+keywords:
+  CHINT: CHINT
+  正泰: CHINT
+  SIEMENS: Siemens
+  西门子: Siemens
+  SEW: SEW
+  Bauer: Bauer
+  Mitsubishi: Mitsubishi
+  三菱: Mitsubishi
+  Autonics: Autonics
+  奥托尼克斯: Autonics
+  ABB: ABB
+  Schneider: Schneider
+  施耐德: Schneider
+  Delta: Delta
+  台达: Delta
+  IFM: IFM
+  TENGEN: TENGEN
+  天正: TENGEN
+
+# 咨询品类关键词 → 品牌
+category:
+  西门子: Siemens
+  三菱: Mitsubishi
+  正泰: CHINT
+  CHINT: CHINT
+  SEW: SEW
+  奥托尼克斯: Autonics
+  Autonics: Autonics
+  ABB: ABB
+  施耐德: Schneider
+  IFM: IFM
+  流量计: IFM
+  TENGEN: TENGEN
+  天正: TENGEN
+  Delta: Delta
+  变频器: Delta

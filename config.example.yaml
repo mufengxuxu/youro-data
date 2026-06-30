@@ -1,0 +1,39 @@
+# 周新客订单表生成配置（复制为 config.yaml 并填入 JSESSIONID）
+api:
+  base_url: https://youro.betterone.tech
+  jsessionid: YOUR_JSESSIONID_HERE
+
+week:
+  begin_date: "2026-06-22"
+  end_date: "2026-06-28"
+  period_label: "06.22 - 06.28"
+
+paths:
+  data_dir: .
+  brands: brands.yaml
+  weekly_xlsx: "2026年Youro运营数据周分析表（6.22—6.28）.xlsx"
+  a02: A02-财务收支.xlsx
+  a05: A05-销售管理表.xlsx
+  salesperson_globs:
+    - "A-0601-*数据汇总表.xlsx"
+    - "A-0601-*重点客户跟进表.xlsx"
+    - "A0602-*数据汇总表.xlsx"
+    - "A0603-*数据汇总表.xlsx"
+    - "A0604-*数据汇总表.xlsx"
+    - "A0605-*数据汇总表.xlsx"
+    - "A0606-*数据汇总表.xlsx"
+    - "A0607-*数据汇总表.xlsx"
+  output_dir: review
+
+pay_method_map:
+  "2": 信保订单
+
+sales_name_map:
+  ennerson: Ennerson
+  lily: Lily
+  sally: Sally
+  grace: Grace
+  cindy: Cindy
+  luck: Luck
+  david: David
+  dane: Dane
