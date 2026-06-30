@@ -273,6 +273,30 @@ class TrafficRow:
     level: str = ""
     shop: str = ""
     file: str = ""
+    source_workbook: str = ""
+    source_sheet: str = ""
+
+
+def is_a05_traffic(t: TrafficRow) -> bool:
+    if t.source_workbook.startswith("A05"):
+        return True
+    return t.file.startswith("A05/")
+
+
+def format_traffic_source(t: TrafficRow) -> str:
+    if t.source_workbook and t.source_sheet:
+        return f"{t.source_workbook} › {t.source_sheet}"
+    if t.source_workbook:
+        return t.source_workbook
+    return t.file
+
+
+def summarize_traffic_sources(rows: list[TrafficRow]) -> str:
+    if not rows:
+        return "（无数据）"
+    from collections import Counter
+    counts = Counter(format_traffic_source(t) for t in rows)
+    return "；".join(f"「{src}」{n}条" for src, n in counts.most_common())
 
 
 def _float(v: Any) -> float | None:
@@ -326,7 +350,12 @@ def load_a02_orders(a02_path: Path) -> dict[tuple, A02OrderRow]:
 def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[TrafficRow]:
     rows_out: list[TrafficRow] = []
 
-    def parse_traffic_sheet(rows: list[list[Any]], source_file: str, shop: str = "") -> None:
+    def parse_traffic_sheet(
+        rows: list[list[Any]],
+        workbook: str,
+        sheet: str,
+        shop: str = "",
+    ) -> None:
         if len(rows) < 3:
             return
         header = [str(x) for x in rows[1]]
@@ -350,15 +379,18 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
                     category=str(row[9] if len(row) > 9 else ""),
                     level=str(row[6] if len(row) > 6 else ""),
                     shop=shop,
-                    file=source_file,
+                    file=f"{workbook} › {sheet}",
+                    source_workbook=workbook,
+                    source_sheet=sheet,
                 )
             )
 
+    a05_workbook = a05_path.name
     a05_sheets = read_xlsx_rows(a05_path)
     for name, rows in a05_sheets.items():
         if "新流量" in name:
             shop = "屿路" if "屿路" in name else "镕川" if "镕川" in name else ""
-            parse_traffic_sheet(rows, f"A05/{name}", shop)
+            parse_traffic_sheet(rows, a05_workbook, name, shop)
 
     shop_from_file = {
         "A0602": "屿路", "A0603": "屿路", "A0604": "屿路", "A0605": "屿路",
@@ -373,7 +405,7 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
             try:
                 for name, rows in read_xlsx_rows(path).items():
                     if "新流量" in name or name.strip() in ("新流量表",):
-                        parse_traffic_sheet(rows, path.name, default_shop)
+                        parse_traffic_sheet(rows, path.name, name, default_shop)
             except Exception as exc:
                 print(f"  warn: skip {path.name}: {exc}", file=sys.stderr)
 
@@ -405,7 +437,7 @@ def find_traffic(
     before = [t for t in candidates if t.add_date and t.add_date <= order_date]
     pool = before or candidates
     pool.sort(key=lambda t: t.add_date or date.min, reverse=True)
-    pool.sort(key=lambda t: (0 if t.file.startswith("A05") else 1))
+    pool.sort(key=lambda t: (0 if is_a05_traffic(t) else 1))
     return pool[0]
 
 
@@ -580,7 +612,7 @@ def compute_order_metrics(
         margin=margin,
         customer=str(sale.get("customerName", "")),
         order_date=str(sale.get("orderDate", ""))[:10],
-        traffic_file=traffic.file if traffic else "",
+        traffic_file=format_traffic_source(traffic) if traffic else "",
         traffic_source=f"{traffic.source or ''}/{traffic.traffic_type or ''}" if traffic else "",
     )
 
@@ -872,6 +904,8 @@ class TrafficCrossSummary:
     store: str
     sales: str
     period: str
+    a05_source: str
+    a060x_source: str
     a05_count: int
     a060x_count: int
     overlap: int
@@ -892,8 +926,10 @@ class TrafficCrossDetail:
     add_date_a060x: str
     level_a05: str
     level_a060x: str
-    a05_file: str
-    a060x_file: str
+    a05_workbook: str
+    a05_sheet: str
+    a060x_workbook: str
+    a060x_sheet: str
     alert: str
 
 
@@ -922,14 +958,17 @@ def compare_traffic_cross(
     for store, sales in sorted(pairs):
         a05 = [
             t for t in traffic_rows
-            if t.file.startswith("A05") and _traffic_in_range(t, store, sales, month_begin, month_end)
+            if is_a05_traffic(t) and _traffic_in_range(t, store, sales, month_begin, month_end)
         ]
         a060x = [
             t for t in traffic_rows
-            if not t.file.startswith("A05") and _traffic_in_range(t, store, sales, month_begin, month_end)
+            if not is_a05_traffic(t) and _traffic_in_range(t, store, sales, month_begin, month_end)
         ]
         if not a05 and not a060x:
             continue
+
+        a05_source_desc = summarize_traffic_sources(a05)
+        a060x_source_desc = summarize_traffic_sources(a060x)
 
         a05_by_key = {_traffic_row_key(t): t for t in a05}
         a060x_by_key = {_traffic_row_key(t): t for t in a060x}
@@ -955,9 +994,14 @@ def compare_traffic_cross(
                         add_date_a060x=tb.add_date.isoformat() if tb.add_date else "",
                         level_a05=la,
                         level_a060x=lb,
-                        a05_file=ta.file,
-                        a060x_file=tb.file,
-                        alert=f"分级 A05={la or '-'} vs A060x={lb or '-'}",
+                        a05_workbook=ta.source_workbook,
+                        a05_sheet=ta.source_sheet,
+                        a060x_workbook=tb.source_workbook,
+                        a060x_sheet=tb.source_sheet,
+                        alert=(
+                            f"分级不一致：{format_traffic_source(ta)} 为 {la or '-'}，"
+                            f"{format_traffic_source(tb)} 为 {lb or '-'}"
+                        ),
                     )
                 )
 
@@ -985,12 +1029,19 @@ def compare_traffic_cross(
                         add_date_a060x=tb.add_date.isoformat() if tb.add_date else "",
                         level_a05=str(ta.level or ""),
                         level_a060x=str(tb.level or ""),
-                        a05_file=ta.file,
-                        a060x_file=tb.file,
-                        alert="同客户两边都有，添加日期不同",
+                        a05_workbook=ta.source_workbook,
+                        a05_sheet=ta.source_sheet,
+                        a060x_workbook=tb.source_workbook,
+                        a060x_sheet=tb.source_sheet,
+                        alert=(
+                            f"同客户两边都有但添加日期不同："
+                            f"{format_traffic_source(ta)}={ta.add_date}，"
+                            f"{format_traffic_source(tb)}={tb.add_date}"
+                        ),
                     )
                 )
             else:
+                peer = a060x_source_desc if a060x else "（该业务员无 A060x 新流量表）"
                 details.append(
                     TrafficCrossDetail(
                         store=store_to_label(store),
@@ -1001,9 +1052,11 @@ def compare_traffic_cross(
                         add_date_a060x="",
                         level_a05=str(ta.level or ""),
                         level_a060x="",
-                        a05_file=ta.file,
-                        a060x_file="",
-                        alert="A060x 无此客户",
+                        a05_workbook=ta.source_workbook,
+                        a05_sheet=ta.source_sheet,
+                        a060x_workbook="",
+                        a060x_sheet="",
+                        alert=f"仅存在于 {format_traffic_source(ta)}；对照 {peer} 无此客户",
                     )
                 )
 
@@ -1011,7 +1064,8 @@ def compare_traffic_cross(
             tb = a060x_by_key[key]
             nc = _norm(tb.customer)
             if nc in a05_cust_dates:
-                continue  # already reported as 日期不一致 from A05 side
+                continue
+            peer = a05_source_desc if a05 else "（该店铺无 A05 新流量表）"
             details.append(
                 TrafficCrossDetail(
                     store=store_to_label(store),
@@ -1022,21 +1076,25 @@ def compare_traffic_cross(
                     add_date_a060x=tb.add_date.isoformat() if tb.add_date else "",
                     level_a05="",
                     level_a060x=str(tb.level or ""),
-                    a05_file="",
-                    a060x_file=tb.file,
-                    alert="A05 无此客户",
+                    a05_workbook="",
+                    a05_sheet="",
+                    a060x_workbook=tb.source_workbook,
+                    a060x_sheet=tb.source_sheet,
+                    alert=f"仅存在于 {format_traffic_source(tb)}；对照 {peer} 无此客户",
                 )
             )
 
         a05_n, a060x_n = len(a05), len(a060x)
-        if a05_n != a060x_n:
-            alerts.append(f"数量 A05={a05_n} vs A060x={a060x_n}")
+        if overlap_keys:
+            alerts.append(f"客户+日期完全匹配 {len(overlap_keys)} 条")
         if a05_only_keys:
-            alerts.append(f"仅A05 {len(a05_only_keys)}条")
+            only_desc = summarize_traffic_sources([a05_by_key[k] for k in a05_only_keys])
+            alerts.append(f"仅 A05 侧 {len(a05_only_keys)} 条：{only_desc}")
         if a060x_only_keys:
-            alerts.append(f"仅A060x {len(a060x_only_keys)}条")
+            only_desc = summarize_traffic_sources([a060x_by_key[k] for k in a060x_only_keys])
+            alerts.append(f"仅 A060x 侧 {len(a060x_only_keys)} 条：{only_desc}")
         if field_mismatch:
-            alerts.append(f"重叠分级不一致 {field_mismatch}条")
+            alerts.append(f"重叠但分级不一致 {field_mismatch} 条（见明细）")
 
         if a05_n == a060x_n == len(overlap_keys) and not a05_only_keys and not a060x_only_keys and not field_mismatch:
             diff = "一致"
@@ -1050,6 +1108,8 @@ def compare_traffic_cross(
                 store=store_to_label(store),
                 sales=sales,
                 period=period,
+                a05_source=a05_source_desc,
+                a060x_source=a060x_source_desc,
                 a05_count=a05_n,
                 a060x_count=a060x_n,
                 overlap=len(overlap_keys),
@@ -1057,7 +1117,7 @@ def compare_traffic_cross(
                 a060x_only=len(a060x_only_keys),
                 field_mismatch=field_mismatch,
                 diff=diff,
-                alert="; ".join(alerts) if alerts else "",
+                alert="；".join(alerts) if alerts else "",
             )
         )
 
@@ -1082,7 +1142,7 @@ def _count_traffic(
         and (not t.shop or t.shop == shop or shop_to_store(t.shop) == store)
         and t.add_date
         and month_begin <= t.add_date <= month_end
-        and (not a05_only or t.file.startswith("A05"))
+        and (not a05_only or is_a05_traffic(t))
     ]
     total = len(matched)
     l1plus = sum(1 for t in matched if is_l1plus(t.level))
@@ -1162,7 +1222,7 @@ def generate_conversion_table(
     ):
         sales_names: set[str] = set()
         for t in traffic_rows:
-            if not t.file.startswith("A05"):
+            if not is_a05_traffic(t):
                 continue
             shop = t.shop or ""
             if shop_to_store(shop) == store and t.add_date and month_begin <= t.add_date <= month_end:
@@ -1401,7 +1461,8 @@ def main() -> int:
         write_review_csv(
             out_dir / "流量交叉核对-汇总.csv",
             [
-                "store", "sales", "period", "a05_count", "a060x_count", "overlap",
+                "store", "sales", "period", "a05_source", "a060x_source",
+                "a05_count", "a060x_count", "overlap",
                 "a05_only", "a060x_only", "field_mismatch", "diff", "alert",
             ],
             traffic_summaries,
@@ -1410,7 +1471,8 @@ def main() -> int:
             out_dir / "流量交叉核对-明细.csv",
             [
                 "store", "sales", "customer", "status", "add_date_a05", "add_date_a060x",
-                "level_a05", "level_a060x", "a05_file", "a060x_file", "alert",
+                "level_a05", "level_a060x",
+                "a05_workbook", "a05_sheet", "a060x_workbook", "a060x_sheet", "alert",
             ],
             traffic_details,
         )
