@@ -247,7 +247,7 @@ flowchart TB
 | 6.周新客订单表 | ✅ `review/6.周新客订单表-Youro.csv` | 已可用 |
 | 2.新客转化表 | ✅ `review/2.新客转化表.csv` | 已可用 |
 | 1.店铺汇总 | ✅ Step6 CSV | A03/A04 聚合 + Sheet6 订单段 |
-| 3.周数据表 | ❌ | **由 Sheet 1 导出**，不单独开发 |
+| 3.周数据表 | ✅ Step7 CSV | Youro Sheet 3；RonChamp 见独立周表 Sheet 1 |
 | 4.周流量品牌 | ❌ | A05 品类聚合 |
 | 5.业务流程 | ❌ | A05 + A07 + Sheet6 一行 |
 | 7.地区分布 | ❌ | A05 国家 Top N |

@@ -1394,6 +1394,7 @@ def aggregate_shop_week_stats(
         return {}
     tm = _shop_sum_col(week, 13) + _shop_sum_col(week, 14)
     l1 = _shop_sum_col(week, 15)
+    l3 = _shop_sum_col(week, 16)
     ad_spend = _shop_sum_col(week, 17)
     qz_spend = _shop_sum_col(week, 27)
     qz_conv = _shop_sum_col(week, 29)
@@ -1412,6 +1413,8 @@ def aggregate_shop_week_stats(
         "周TM+询盘数量（个）": tm,
         "周L1+数量（个）": l1,
         "周L1+买家占比率": round(l1 / tm, 12) if tm else "",
+        "周L3+数量（个）": l3 if l3 else "",
+        "周L3+买家占比率": round(l3 / tm, 12) if tm and l3 else "",
         "全站推周平均转化成本（元）": round(qz_spend / qz_conv, 12) if qz_conv else "",
         "全站推周累计转化人数": qz_conv or "",
         "全站推周曝光": _shop_sum_col(week, 30) or "",
@@ -1459,19 +1462,35 @@ def apply_a07_intent_to_youro(
     youro_stats["截止当前意向订单金额"] = a07["intent_new_amount"] or 0
 
 
-def generate_step6_shop_summary_csv(
-    out_dir: Path,
-    period: str,
-    week_begin: date,
-    week_end: date,
+STEP7_METRICS = [
+    "现有产品数量（个）",
+    "在架商品数量（个）",
+    "周新上架产品数量（个）",
+    "周优化产品数量（个）",
+    "现有优品数量（个）",
+    "周累计曝光量（个）",
+    "周访客人数（个）",
+    "周累计点击量（个）",
+    "周TM+询盘数量（个）",
+    "周L1+数量（个）",
+    "周L1+买家占比率",
+    "周L3+数量（个）",
+    "周L3+买家占比率",
+    "周广告花费（元）",
+    "周单个获客成本（元）",
+]
+
+
+def build_shop_summary_pair(
     a03_path: Path,
     a04_path: Path,
     a07_path: Path,
+    period: str,
+    week_begin: date,
+    week_end: date,
     youro_order_rows: list[list[Any]],
     ronchamp_order_rows: list[list[Any]],
-) -> Path:
-    slug = period_slug(week_begin, week_end)
-    path = out_dir / f"Step6-店铺汇总-{slug}.csv"
+) -> tuple[dict[str, Any], dict[str, Any]]:
     youro = load_shop_week_stats(a03_path, week_begin, week_end)
     ronchamp = load_shop_week_stats(a04_path, week_begin, week_end)
     apply_shop_order_stats(youro, youro_order_rows)
@@ -1479,6 +1498,19 @@ def generate_step6_shop_summary_csv(
     apply_a07_intent_to_youro(youro, a07_path, week_begin, week_end, period)
     ronchamp["截止当前意向订单数"] = ""
     ronchamp["截止当前意向订单金额"] = ""
+    return youro, ronchamp
+
+
+def generate_step6_shop_summary_csv(
+    out_dir: Path,
+    period: str,
+    week_begin: date,
+    week_end: date,
+    youro: dict[str, Any],
+    ronchamp: dict[str, Any],
+) -> Path:
+    slug = period_slug(week_begin, week_end)
+    path = out_dir / f"Step6-店铺汇总-{slug}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
@@ -1486,6 +1518,27 @@ def generate_step6_shop_summary_csv(
         w.writerow(["指标", "Youro", "RonChamp"])
         for metric in STEP6_METRICS:
             w.writerow([metric, youro.get(metric, ""), ronchamp.get(metric, "")])
+    return path
+
+
+def generate_step7_overview_csv(
+    out_dir: Path,
+    period: str,
+    week_begin: date,
+    week_end: date,
+    store_label: str,
+    stats: dict[str, Any],
+) -> Path:
+    """Sheet 3（Youro）/ Sheet 1（RonChamp）总览，与 Step6 同店同源。"""
+    slug = period_slug(week_begin, week_end)
+    path = out_dir / f"Step7-{store_label}-周数据总览-{slug}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["周期", period])
+        w.writerow(["指标", store_label])
+        for metric in STEP7_METRICS:
+            w.writerow([metric, stats.get(metric, "")])
     return path
 
 
@@ -2126,19 +2179,30 @@ def main() -> int:
 
     a03_path = data_dir / paths.get("a03", "A03-26年Youro综合运营数据表.xlsx")
     a04_path = data_dir / paths.get("a04", "A04-26年Ronchamp运营数据表.xlsx")
-    step6_path = generate_step6_shop_summary_csv(
-        out_dir,
-        period,
-        week_begin,
-        week_end,
+    youro_shop, ronchamp_shop = build_shop_summary_pair(
         a03_path,
         a04_path,
         a07_path,
+        period,
+        week_begin,
+        week_end,
         youro_rows,
         ronchamp_rows,
     )
+    step6_path = generate_step6_shop_summary_csv(
+        out_dir, period, week_begin, week_end, youro_shop, ronchamp_shop
+    )
+    step7_youro = generate_step7_overview_csv(
+        out_dir, period, week_begin, week_end, "Youro", youro_shop
+    )
+    step7_ron = generate_step7_overview_csv(
+        out_dir, period, week_begin, week_end, "RonChamp", ronchamp_shop
+    )
     print(f"\nStep 6 review CSV:")
     print(f"  {step6_path}")
+    print(f"Step 7 review CSVs:")
+    print(f"  {step7_youro}")
+    print(f"  {step7_ron}")
     if not load_shop_week_stats(a03_path, week_begin, week_end):
         print(f"  ⚠ Youro shop stats empty — check {a03_path.name} › {SHOP_MONTH_SHEET.format(month=week_end.month)}")
     if not load_shop_week_stats(a04_path, week_begin, week_end):
