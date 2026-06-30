@@ -8,10 +8,17 @@ week:
   end_date: "2026-06-28"
   period_label: "06.22 - 06.28"
 
+conversion:
+  month_begin: "2026-06-01"
+  month_end: "2026-06-28"
+  title: "6.1 - 6.28"
+
 paths:
   data_dir: .
   brands: brands.yaml
   weekly_xlsx: "2026年Youro运营数据周分析表（6.22—6.28）.xlsx"
+  weekly_youro_xlsx: "2026年Youro运营数据周分析表（6.22—6.28）.xlsx"
+  weekly_ronchamp_xlsx: "2026年Ronchamp运营数据周分析表（6.22—6.28）.xlsx"
   a02: A02-财务收支.xlsx
   a05: A05-销售管理表.xlsx
   salesperson_globs:

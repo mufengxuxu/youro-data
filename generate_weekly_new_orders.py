@@ -244,6 +244,7 @@ class A02OrderRow:
     order_date: date | None = None
     sales: str = ""
     customer: str = ""
+    shop: str = ""
     country: str = ""
     qty: int | float | None = None
     order_amount_usd: float | None = None
@@ -269,6 +270,8 @@ class TrafficRow:
     source: str = ""
     traffic_type: str = ""
     category: str = ""
+    level: str = ""
+    shop: str = ""
     file: str = ""
 
 
@@ -298,6 +301,7 @@ def load_a02_orders(a02_path: Path) -> dict[tuple, A02OrderRow]:
             order_date=d,
             sales=sales,
             customer=customer,
+            shop=str(row[5] if len(row) > 5 else ""),
             country=str(row[6] if len(row) > 6 else ""),
             qty=row[7] if len(row) > 7 else None,
             order_amount_usd=_float(row[8] if len(row) > 8 else None),
@@ -322,13 +326,12 @@ def load_a02_orders(a02_path: Path) -> dict[tuple, A02OrderRow]:
 def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[TrafficRow]:
     rows_out: list[TrafficRow] = []
 
-    def parse_traffic_sheet(rows: list[list[Any]], source_file: str) -> None:
+    def parse_traffic_sheet(rows: list[list[Any]], source_file: str, shop: str = "") -> None:
         if len(rows) < 3:
             return
         header = [str(x) for x in rows[1]]
         if "客户姓名" not in "".join(header) and "客户" not in "".join(header):
             return
-        # A05 layout: 序号,业务员,客户姓名,注册,国家,添加日期,分级,来源,类型,品类,...
         for row in rows[2:]:
             if len(row) < 6:
                 continue
@@ -345,6 +348,8 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
                     source=str(row[7] if len(row) > 7 else ""),
                     traffic_type=str(row[8] if len(row) > 8 else ""),
                     category=str(row[9] if len(row) > 9 else ""),
+                    level=str(row[6] if len(row) > 6 else ""),
+                    shop=shop,
                     file=source_file,
                 )
             )
@@ -352,16 +357,23 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
     a05_sheets = read_xlsx_rows(a05_path)
     for name, rows in a05_sheets.items():
         if "新流量" in name:
-            parse_traffic_sheet(rows, f"A05/{name}")
+            shop = "屿路" if "屿路" in name else "镕川" if "镕川" in name else ""
+            parse_traffic_sheet(rows, f"A05/{name}", shop)
 
+    shop_from_file = {
+        "A0602": "屿路", "A0603": "屿路", "A0604": "屿路", "A0605": "屿路",
+        "A0601": "屿路", "A0606": "镕川", "A0607": "镕川",
+    }
     for pattern in globs:
         for path in sorted(data_dir.glob(pattern)):
             if path.name.startswith("~$"):
                 continue
+            prefix = path.name.split("-")[0]
+            default_shop = shop_from_file.get(prefix, "")
             try:
                 for name, rows in read_xlsx_rows(path).items():
                     if "新流量" in name or name.strip() in ("新流量表",):
-                        parse_traffic_sheet(rows, path.name)
+                        parse_traffic_sheet(rows, path.name, default_shop)
             except Exception as exc:
                 print(f"  warn: skip {path.name}: {exc}", file=sys.stderr)
 
@@ -373,6 +385,7 @@ def find_traffic(
     sales: str,
     customer: str,
     order_date: date,
+    store: str | None = None,
 ) -> TrafficRow | None:
     ns, nc = _norm(sales), _norm(customer)
     candidates = [
@@ -380,6 +393,11 @@ def find_traffic(
         for t in traffic_rows
         if _norm(t.customer) == nc and (_norm(t.sales) == ns or not t.sales)
     ]
+    if store:
+        shop = STORE_TO_SHOP.get(store, "")
+        store_matched = [t for t in candidates if not t.shop or t.shop == shop or shop_to_store(t.shop) == store]
+        if store_matched:
+            candidates = store_matched
     if not candidates:
         candidates = [t for t in traffic_rows if _norm(t.customer) == nc]
     if not candidates:
@@ -387,7 +405,6 @@ def find_traffic(
     before = [t for t in candidates if t.add_date and t.add_date <= order_date]
     pool = before or candidates
     pool.sort(key=lambda t: t.add_date or date.min, reverse=True)
-    # prefer A05
     pool.sort(key=lambda t: (0 if t.file.startswith("A05") else 1))
     return pool[0]
 
@@ -453,6 +470,88 @@ def pay_channel(api_method: Any, a02: A02OrderRow | None, pay_map: dict) -> str:
 # ---------------------------------------------------------------------------
 # Row builder
 # ---------------------------------------------------------------------------
+
+STORE_YOURO = "Youro"
+STORE_RONCHAMP = "RonChamp"
+SHOP_TO_STORE = {"屿路": STORE_YOURO, "镕川": STORE_RONCHAMP}
+STORE_TO_SHOP = {STORE_YOURO: "屿路", STORE_RONCHAMP: "镕川"}
+
+YOURO_SALES_ORDER = ["Ennerson", "Luck", "Cindy", "Grace", "David", "Lily"]
+RONCHAMP_SALES_ORDER = ["Lily", "Sally", "Grace"]
+
+
+def shop_to_store(shop: str) -> str:
+    return SHOP_TO_STORE.get(str(shop or "").strip(), STORE_YOURO)
+
+
+def store_to_label(store: str) -> str:
+    return "RonChamp" if store == STORE_RONCHAMP else "Youro"
+
+
+def is_l1plus(level: Any) -> bool:
+    s = str(level or "").strip().upper().replace(" ", "")
+    return s not in ("", "L0") and s != "L1-"
+
+
+def classify_channel(traffic: "TrafficRow | None") -> str:
+    if traffic is None:
+        return "other"
+    t = str(traffic.traffic_type or "").upper()
+    s = str(traffic.source or "").upper()
+    if "RFQ" in t or "RFQ" in s:
+        return "rfq"
+    if t in ("TM", "询盘", "R-TM") or "TM" in t or "询盘" in t:
+        return "tm"
+    if traffic.source or traffic.traffic_type:
+        return "tm"
+    return "other"
+
+
+def resolve_store(a02: A02OrderRow | None, sale: dict) -> str:
+    if a02 and str(a02.shop or "").strip():
+        return shop_to_store(a02.shop)
+    company = sale.get("company")
+    if company in (1, "1"):
+        return STORE_RONCHAMP
+    return STORE_YOURO
+
+
+@dataclass
+class OrderMetrics:
+    store: str
+    sales: str
+    channel: str
+    payment_rmb: float
+    gross: float | None
+    margin: float | None
+
+
+def compute_order_metrics(
+    sale: dict,
+    purchaser: dict | None,
+    a02: A02OrderRow | None,
+    traffic: TrafficRow | None,
+    brands: dict,
+    cfg: dict,
+) -> OrderMetrics:
+    row, _, _ = build_row(sale, purchaser, a02, traffic, brands, cfg)
+    sales = str(row[2])
+    payment_rmb = float(row[8]) if row[8] != "" else 0.0
+    gross = float(row[16]) if row[16] != "" else None
+    margin = float(row[17]) if row[17] != "" else None
+    store = resolve_store(a02, sale)
+    channel = classify_channel(traffic)
+    return OrderMetrics(store, sales, channel, payment_rmb, gross, margin)
+
+
+CONVERSION_HEADERS = [
+    "所属店铺", "业务员", "总成交数",
+    "TM_6月新客数量", "TM_L1+新客数量", "TM_L1+占比",
+    "TM_本月成交新客数量", "TM_新客转化率", "TM_新客成交金额", "TM_新客毛利润", "TM_新客毛利率",
+    "RFQ_本月成交新客数量", "RFQ_成交金额", "RFQ_新客毛利润", "RFQ_新客毛利率",
+    "其他_本月成交新客数量", "其他_成交金额", "其他_新客毛利润", "其他_新客毛利率",
+    "备注",
+]
 
 WEEKLY_HEADERS = [
     "周期", "订单日期", "销售人员", "客户姓名", "所属国家", "型号数量",
@@ -571,7 +670,9 @@ def build_row(
             margin = a02.gross_margin
 
     traffic_type = traffic.traffic_type if traffic else ""
-    if not traffic_type and traffic:
+    if not traffic:
+        traffic_type = "转介绍"
+    elif not traffic_type:
         traffic_type = traffic.source
     category = traffic.category if traffic else ""
     add_serial = to_excel_serial(traffic.add_date) if traffic and traffic.add_date else ""
@@ -635,8 +736,13 @@ def write_review_csv(path: Path, headers: list[str], objects: list[Any]) -> None
     write_csv(path, headers, rows)
 
 
-def patch_weekly_xlsx(xlsx_path: Path, new_rows: list[list[Any]], period: str) -> None:
-    """Append/replace rows for target period in sheet 6.周新客订单表."""
+def patch_weekly_xlsx(
+    xlsx_path: Path,
+    new_rows: list[list[Any]],
+    period: str,
+    sheet_prefix: str | None = None,
+) -> None:
+    """Append/replace rows for target period in weekly new-order sheet."""
     try:
         import openpyxl
     except ImportError:
@@ -644,13 +750,22 @@ def patch_weekly_xlsx(xlsx_path: Path, new_rows: list[list[Any]], period: str) -
         return
 
     wb = openpyxl.load_workbook(xlsx_path)
-    sheet_name = next((n for n in wb.sheetnames if "新客订单" in n), None)
+    if sheet_prefix:
+        sheet_name = next(
+            (
+                n
+                for n in wb.sheetnames
+                if n.startswith(sheet_prefix) or (sheet_prefix in n and "新客订单" in n)
+            ),
+            None,
+        )
+    else:
+        sheet_name = next((n for n in wb.sheetnames if "新客订单" in n), None)
     if not sheet_name:
-        print("  skip xlsx writeback: sheet not found", file=sys.stderr)
+        print(f"  skip xlsx writeback: sheet not found (prefix={sheet_prefix})", file=sys.stderr)
         return
     ws = wb[sheet_name]
 
-    # remove existing rows for same period (col A)
     to_delete = []
     for r in range(4, ws.max_row + 1):
         val = ws.cell(r, 1).value
@@ -667,10 +782,192 @@ def patch_weekly_xlsx(xlsx_path: Path, new_rows: list[list[Any]], period: str) -
     print(f"  wrote {len(new_rows)} rows to {xlsx_path.name} ({sheet_name})")
 
 
+def _sales_sort_key(sales: str, order_list: list[str]) -> tuple[int, str]:
+    try:
+        return (order_list.index(sales), sales)
+    except ValueError:
+        return (len(order_list), sales)
+
+
+def _count_traffic(
+    traffic_rows: list[TrafficRow],
+    store: str,
+    sales: str,
+    month_begin: date,
+    month_end: date,
+) -> tuple[int, int]:
+    shop = STORE_TO_SHOP.get(store, "")
+    ns = _norm(sales)
+    matched = [
+        t
+        for t in traffic_rows
+        if _norm(t.sales) == ns
+        and (not t.shop or t.shop == shop or shop_to_store(t.shop) == store)
+        and t.add_date
+        and month_begin <= t.add_date <= month_end
+    ]
+    total = len(matched)
+    l1plus = sum(1 for t in matched if is_l1plus(t.level))
+    return total, l1plus
+
+
+def _ratio(num: float | int | None, den: float | int | None) -> float | str:
+    if not den:
+        return ""
+    return round(float(num or 0) / float(den), 4)
+
+
+def _margin_pct(gross: float | None, amount: float) -> float | str:
+    if gross is None or not amount:
+        return ""
+    return round(gross / amount, 4)
+
+
+def generate_conversion_table(
+    month_sales: list[dict],
+    a02_match: dict[tuple, A02OrderRow],
+    traffic_rows: list[TrafficRow],
+    brands: dict,
+    cfg: dict,
+    api: YouroApi,
+) -> list[list[Any]]:
+    conv = cfg.get("conversion") or {}
+    month_begin = parse_api_date(conv.get("month_begin", cfg["week"]["begin_date"][:8] + "01"))
+    month_end = parse_api_date(conv.get("month_end", cfg["week"]["end_date"]))
+    sales_map = cfg.get("sales_name_map", {})
+
+    metrics: list[OrderMetrics] = []
+    for sale in month_sales:
+        if sale.get("firstOrder") != "Y":
+            continue
+        od = parse_api_date(sale["orderDate"])
+        if od < month_begin or od > month_end:
+            continue
+        sales_name = normalize_sales(sale.get("createBy", ""), sales_map)
+        customer = str(sale.get("customerName", ""))
+        a02 = a02_match.get((od.isoformat(), _norm(sales_name), _norm(customer)))
+        store = resolve_store(a02, sale)
+        traffic = find_traffic(traffic_rows, sales_name, customer, od, store)
+        purchaser = api.get_purchaser_order(sale["orderNo"])
+        metrics.append(compute_order_metrics(sale, purchaser, a02, traffic, brands, cfg))
+
+    rows_out: list[list[Any]] = []
+    totals = {"I": 0.0, "J": 0.0, "M": 0.0, "N": 0.0, "Q": 0.0, "R": 0.0}
+    count_totals = {"D": 0, "E": 0, "G": 0, "L": 0, "P": 0}
+
+    for store, order_list, label in (
+        (STORE_YOURO, YOURO_SALES_ORDER, store_to_label(STORE_YOURO)),
+        (STORE_RONCHAMP, RONCHAMP_SALES_ORDER, store_to_label(STORE_RONCHAMP)),
+    ):
+        sales_names: set[str] = set()
+        for t in traffic_rows:
+            shop = t.shop or ""
+            if shop_to_store(shop) == store and t.add_date and month_begin <= t.add_date <= month_end:
+                sales_names.add(normalize_sales(t.sales, sales_map))
+        for m in metrics:
+            if m.store == store:
+                sales_names.add(m.sales)
+        sales_names.discard("")
+
+        sorted_sales = sorted(sales_names, key=lambda s: _sales_sort_key(s, order_list))
+        first_in_group = True
+        for sales in sorted_sales:
+            d, e = _count_traffic(traffic_rows, store, sales, month_begin, month_end)
+            tm = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "tm"]
+            rfq = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "rfq"]
+            other = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "other"]
+
+            tm_amt = sum(m.payment_rmb for m in tm)
+            rfq_amt = sum(m.payment_rmb for m in rfq)
+            other_amt = sum(m.payment_rmb for m in other)
+            tm_gross = sum(m.gross or 0 for m in tm) if tm else None
+            rfq_gross = sum(m.gross or 0 for m in rfq) if rfq else None
+            other_gross = sum(m.gross or 0 for m in other) if other else None
+
+            g, l_cnt, p = len(tm), len(rfq), len(other)
+            c = g + l_cnt + p
+
+            row = [
+                label if first_in_group else "",
+                sales,
+                c if c else "",
+                d if d else "",
+                e if e else "",
+                _ratio(e, d),
+                g if g else "",
+                _ratio(g, d),
+                round(tm_amt, 2) if tm_amt else "",
+                round(tm_gross, 2) if tm_gross is not None and tm else "",
+                _margin_pct(tm_gross, tm_amt) if tm and tm_gross is not None else "",
+                l_cnt if l_cnt else "",
+                round(rfq_amt, 2) if rfq_amt else "",
+                round(rfq_gross, 2) if rfq_gross is not None and rfq else "",
+                _margin_pct(rfq_gross, rfq_amt) if rfq and rfq_gross is not None else "",
+                p if p else "",
+                round(other_amt, 2) if other_amt else "",
+                round(other_gross, 2) if other_gross is not None and other else "",
+                _margin_pct(other_gross, other_amt) if other and other_gross is not None else "",
+                "",
+            ]
+            rows_out.append(row)
+            first_in_group = False
+
+            count_totals["D"] += d
+            count_totals["E"] += e
+            count_totals["G"] += g
+            count_totals["L"] += l_cnt
+            count_totals["P"] += p
+            for key, col_idx in [("I", 8), ("J", 9), ("M", 12), ("N", 13), ("Q", 16), ("R", 17)]:
+                val = row[col_idx]
+                if val != "":
+                    totals[key] += float(val)
+
+    total_row = [
+        "总计", "", count_totals["G"] + count_totals["L"] + count_totals["P"],
+        count_totals["D"] or "", count_totals["E"] or "", _ratio(count_totals["E"], count_totals["D"]),
+        count_totals["G"] or "", _ratio(count_totals["G"], count_totals["D"]),
+        round(totals["I"], 2) if totals["I"] else "",
+        round(totals["J"], 2) if totals["J"] else "",
+        _margin_pct(totals["J"], totals["I"]) if totals["I"] else "",
+        count_totals["L"] or "",
+        round(totals["M"], 2) if totals["M"] else "",
+        round(totals["N"], 2) if totals["N"] else "",
+        _margin_pct(totals["N"], totals["M"]) if totals["M"] else "",
+        count_totals["P"] or "",
+        round(totals["Q"], 2) if totals["Q"] else "",
+        round(totals["R"], 2) if totals["R"] else "",
+        _margin_pct(totals["R"], totals["Q"]) if totals["Q"] else "",
+        "",
+    ]
+    rows_out.append(total_row)
+    return rows_out
+
+
+def process_week_order(
+    sale: dict,
+    api: YouroApi,
+    a02_match: dict[tuple, A02OrderRow],
+    traffic_rows: list[TrafficRow],
+    brands: dict,
+    cfg: dict,
+) -> tuple[str, list[Any], PurchaseReview, BrandReview]:
+    order_no = sale["orderNo"]
+    purchaser = api.get_purchaser_order(order_no)
+    od = parse_api_date(sale["orderDate"])
+    sales_name = normalize_sales(sale.get("createBy", ""), cfg.get("sales_name_map", {}))
+    customer = str(sale.get("customerName", ""))
+    a02 = a02_match.get((od.isoformat(), _norm(sales_name), _norm(customer)))
+    store = resolve_store(a02, sale)
+    traffic = find_traffic(traffic_rows, sales_name, customer, od, store)
+    row, pr, br = build_row(sale, purchaser, a02, traffic, brands, cfg)
+    return store, row, pr, br
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate weekly new-customer order rows")
     parser.add_argument("-c", "--config", default="config.yaml")
     parser.add_argument("--no-xlsx", action="store_true", help="Skip writing back to weekly xlsx")
+    parser.add_argument("--no-conversion", action="store_true", help="Skip monthly conversion table")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent
@@ -678,6 +975,7 @@ def main() -> int:
     brands = load_brands(root / cfg["paths"]["brands"])
     data_dir = root / cfg["paths"]["data_dir"]
     out_dir = root / cfg["paths"]["output_dir"]
+    paths = cfg["paths"]
 
     api = YouroApi(cfg["api"]["base_url"], cfg["api"]["jsessionid"])
     begin = cfg["week"]["begin_date"]
@@ -686,40 +984,43 @@ def main() -> int:
 
     print(f"Fetching sales orders {begin} ~ {end} (firstOrder=Y)...")
     sales = api.list_sales_orders(begin, end)
-    sales = [s for s in sales if s.get("firstOrder") == "Y" and s.get("company") in (0, "0", None)]
-    print(f"  {len(sales)} orders")
+    sales = [s for s in sales if s.get("firstOrder") == "Y"]
+    print(f"  {len(sales)} first-order rows")
 
     print("Loading Excel sources...")
-    a02_match = load_a02_orders(data_dir / cfg["paths"]["a02"])
+    a02_match = load_a02_orders(data_dir / paths["a02"])
     traffic_rows = load_traffic_rows(
         data_dir,
-        data_dir / cfg["paths"]["a05"],
-        cfg["paths"]["salesperson_globs"],
+        data_dir / paths["a05"],
+        paths["salesperson_globs"],
     )
     print(f"  A02 order keys: {len(a02_match)}, traffic rows: {len(traffic_rows)}")
 
-    weekly_rows: list[list[Any]] = []
+    youro_rows: list[list[Any]] = []
+    ronchamp_rows: list[list[Any]] = []
     purchase_reviews: list[PurchaseReview] = []
     brand_reviews: list[BrandReview] = []
 
     for sale in sorted(sales, key=lambda s: s.get("orderDate", "")):
         order_no = sale["orderNo"]
         print(f"  processing {order_no}...")
-        purchaser = api.get_purchaser_order(order_no)
-        od = parse_api_date(sale["orderDate"])
-        sales_name = normalize_sales(sale.get("createBy", ""), cfg.get("sales_name_map", {}))
-        a02 = a02_match.get((od.isoformat(), _norm(sales_name), _norm(sale.get("customerName", ""))))
-        traffic = find_traffic(traffic_rows, sales_name, str(sale.get("customerName", "")), od)
-
-        row, pr, br = build_row(sale, purchaser, a02, traffic, brands, cfg)
-        weekly_rows.append(row)
+        store, row, pr, br = process_week_order(
+            sale, api, a02_match, traffic_rows, brands, cfg
+        )
+        shop_label = STORE_TO_SHOP.get(store, store)
+        print(f"    → {shop_label} ({store_to_label(store)})")
+        if store == STORE_RONCHAMP:
+            ronchamp_rows.append(row)
+        else:
+            youro_rows.append(row)
         purchase_reviews.append(pr)
         brand_reviews.append(br)
 
         if pr.purchase_diff in ("是", "部分缺失", "缺失"):
             print(f"    ⚠ 采购 {order_no}: {pr.purchase_diff} — {pr.purchase_alert}")
 
-    write_csv(out_dir / "6.周新客订单表.csv", WEEKLY_HEADERS, weekly_rows)
+    write_csv(out_dir / "6.周新客订单表-Youro.csv", WEEKLY_HEADERS, youro_rows)
+    write_csv(out_dir / "4.周新客订单表-RonChamp.csv", WEEKLY_HEADERS, ronchamp_rows)
     write_review_csv(
         out_dir / "采购核对.csv",
         ["order_no", "purchase_api", "purchase_a02_order", "purchase_diff", "purchase_alert"],
@@ -732,16 +1033,38 @@ def main() -> int:
     )
 
     print(f"\nOutput:")
-    print(f"  {out_dir / '6.周新客订单表.csv'}")
+    print(f"  {out_dir / '6.周新客订单表-Youro.csv'} ({len(youro_rows)} rows)")
+    print(f"  {out_dir / '4.周新客订单表-RonChamp.csv'} ({len(ronchamp_rows)} rows)")
     print(f"  {out_dir / '采购核对.csv'}")
     print(f"  {out_dir / '品牌复核.csv'}")
 
     if not args.no_xlsx:
-        xlsx = data_dir / cfg["paths"]["weekly_xlsx"]
-        if xlsx.exists():
-            patch_weekly_xlsx(xlsx, weekly_rows, period)
-        else:
-            print(f"  weekly xlsx not found: {xlsx}")
+        youro_xlsx = paths.get("weekly_youro_xlsx") or paths.get("weekly_xlsx")
+        if youro_xlsx:
+            xlsx = data_dir / youro_xlsx
+            if xlsx.exists():
+                patch_weekly_xlsx(xlsx, youro_rows, period, sheet_prefix="6")
+            else:
+                print(f"  Youro weekly xlsx not found: {xlsx}")
+        ron_xlsx = paths.get("weekly_ronchamp_xlsx")
+        if ron_xlsx:
+            xlsx = data_dir / ron_xlsx
+            if xlsx.exists():
+                patch_weekly_xlsx(xlsx, ronchamp_rows, period, sheet_prefix="4")
+            else:
+                print(f"  Ronchamp weekly xlsx not found: {xlsx}")
+
+    if not args.no_conversion and cfg.get("conversion"):
+        conv = cfg["conversion"]
+        mb = conv.get("month_begin", begin[:8] + "01")
+        me = conv.get("month_end", end)
+        print(f"\nGenerating conversion table {mb} ~ {me}...")
+        month_sales = api.list_sales_orders(mb, me)
+        conversion_rows = generate_conversion_table(
+            month_sales, a02_match, traffic_rows, brands, cfg, api
+        )
+        write_csv(out_dir / "2.新客转化表.csv", CONVERSION_HEADERS, conversion_rows)
+        print(f"  {out_dir / '2.新客转化表.csv'} ({len(conversion_rows)} rows)")
 
     return 0
 
