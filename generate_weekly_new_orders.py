@@ -39,6 +39,33 @@ def load_brands(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+def load_exceptions(path: Path) -> dict:
+    """单次转化表例外；文件不存在时返回空结构。"""
+    empty = {"conversion_excludes": [], "conversion_channel_overrides": []}
+    if not path.exists():
+        return empty
+    with path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    return {
+        "conversion_excludes": list(data.get("conversion_excludes") or []),
+        "conversion_channel_overrides": list(data.get("conversion_channel_overrides") or []),
+    }
+
+
+def conversion_exclude_order_nos(exceptions: dict) -> set[str]:
+    return {str(e["order_no"]) for e in exceptions.get("conversion_excludes", []) if e.get("order_no")}
+
+
+def conversion_channel_override_map(exceptions: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for entry in exceptions.get("conversion_channel_overrides", []):
+        order_no = str(entry.get("order_no") or "").strip()
+        channel = str(entry.get("channel") or "").strip().lower()
+        if order_no and channel in ("tm", "rfq", "other"):
+            out[order_no] = entry
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Dates
 # ---------------------------------------------------------------------------
@@ -227,6 +254,17 @@ def read_xlsx_rows(xlsx_path: Path, sheet_name: str | None = None) -> dict[str, 
 
 def _norm(s: Any) -> str:
     return re.sub(r"\s+", " ", str(s or "").strip()).lower()
+
+
+# 交叉核对客户名归一（拼写差异）
+TRAFFIC_CUSTOMER_ALIASES = {
+    "airo mafra": "jairo mafra",
+}
+
+
+def _norm_traffic_customer(customer: str) -> str:
+    n = _norm(customer)
+    return TRAFFIC_CUSTOMER_ALIASES.get(n, n)
 
 
 def _find_sheet(rows_by_sheet: dict[str, list[list[Any]]], *keywords: str) -> tuple[str, list[list[Any]]]:
@@ -591,6 +629,22 @@ def is_l1plus(level: Any) -> bool:
     return s not in ("", "L0") and s != "L1-"
 
 
+def levels_equivalent(a: str, b: str) -> bool:
+    """业务口径：A060x 的 L2 等价于 A05 的 L1+。"""
+    na = str(a or "").strip().upper().replace(" ", "")
+    nb = str(b or "").strip().upper().replace(" ", "")
+    if na == nb:
+        return True
+    if {na, nb} == {"L1+", "L2"}:
+        return True
+    return False
+
+
+def is_alan_assigned(traffic: "TrafficRow") -> bool:
+    tt = str(traffic.traffic_type or "").replace(" ", "").lower()
+    return "alan分配" in tt
+
+
 OTHER_CHANNEL_KEYWORDS = ("转介绍", "微信", "公海", "客户介绍", "介绍", "老客户")
 
 
@@ -598,23 +652,58 @@ def _text_has_other_keyword(text: str) -> bool:
     return any(kw in str(text or "") for kw in OTHER_CHANNEL_KEYWORDS)
 
 
-def is_explicit_other_channel(traffic: "TrafficRow | None", sale: dict | None = None) -> bool:
-    if traffic:
-        combined = f"{traffic.source or ''}{traffic.traffic_type or ''}"
-        if _text_has_other_keyword(combined):
+def is_traffic_other_channel(traffic: "TrafficRow") -> bool:
+    if is_alan_assigned(traffic):
+        return True
+    combined = f"{traffic.source or ''}{traffic.traffic_type or ''}"
+    return _text_has_other_keyword(combined)
+
+
+def is_sale_other_channel(sale: dict) -> bool:
+    for field in ("salesRemark", "remark", "receiptRemark"):
+        if _text_has_other_keyword(str(sale.get(field) or "")):
             return True
-    if sale:
-        for field in ("salesRemark", "remark", "receiptRemark"):
-            if _text_has_other_keyword(str(sale.get(field) or "")):
-                return True
     return False
 
 
-def classify_channel(traffic: "TrafficRow | None", sale: dict | None = None) -> str:
+def is_explicit_other_channel(traffic: "TrafficRow | None", sale: dict | None = None) -> bool:
+    if traffic and is_traffic_other_channel(traffic):
+        return True
+    if sale and not traffic and is_sale_other_channel(sale):
+        return True
+    return False
+
+
+def load_a07_intent_keys(data_dir: Path, a07_filename: str) -> set[tuple[str, str]]:
+    """A07 意向订单 → 无 A05 流量时归入「其他」渠道的首单。"""
+    path = data_dir / a07_filename
+    if not path.exists():
+        return set()
+    keys: set[tuple[str, str]] = set()
+    for sheet, rows in read_xlsx_rows(path).items():
+        if "意向" not in sheet:
+            continue
+        for row in rows[2:]:
+            if len(row) < 4:
+                continue
+            sales = str(row[2] if len(row) > 2 else "").strip()
+            customer = str(row[3] if len(row) > 3 else "").strip()
+            if sales and customer:
+                keys.add((_norm(sales), _norm(customer)))
+    return keys
+
+
+def classify_channel(
+    traffic: "TrafficRow | None",
+    sale: dict | None = None,
+    *,
+    sales_name: str = "",
+    store: str = "",
+    a07_intent: set[tuple[str, str]] | None = None,
+) -> str:
     """tm / rfq / other（明确非 TM 来源）/ unclassified（无流量且非明确其他）."""
     if traffic:
-        combined = f"{traffic.source or ''}{traffic.traffic_type or ''}"
-        if _text_has_other_keyword(combined):
+        if is_traffic_other_channel(traffic):
             return "other"
         t = str(traffic.traffic_type or "").upper()
         s = str(traffic.source or "").upper()
@@ -624,8 +713,16 @@ def classify_channel(traffic: "TrafficRow | None", sale: dict | None = None) -> 
             return "tm"
         if traffic.source or traffic.traffic_type:
             return "tm"
-    if is_explicit_other_channel(traffic, sale):
-        return "other"
+    if sale and not traffic:
+        sn = _norm(sales_name)
+        nc = _norm(str(sale.get("customerName", "")))
+        if a07_intent and (sn, nc) in a07_intent:
+            return "other"
+        # 镕川 Sally 公司转介首单：无新流量表记录 → 其他
+        if store == STORE_RONCHAMP and sn == _norm("Sally"):
+            return "other"
+        if is_sale_other_channel(sale):
+            return "other"
     return "unclassified"
 
 
@@ -667,7 +764,9 @@ def compute_order_metrics(
     gross = float(row[16]) if row[16] != "" else None
     margin = float(row[17]) if row[17] != "" else None
     store = resolve_store(a02, sale)
-    channel = classify_channel(traffic, sale)
+    channel = classify_channel(
+        traffic, sale, sales_name=sales, store=store, a07_intent=cfg.get("_a07_intent")
+    )
     return OrderMetrics(
         order_no=str(sale.get("orderNo", "")),
         store=store,
@@ -699,6 +798,16 @@ WEEKLY_HEADERS = [
     "其它运输运费", "物流方式", "初始运费", "毛利润（人民币）", "毛利率",
     "流量添加日期", "流量来源", "咨询品类", "成交产品",
 ]
+
+
+@dataclass
+class ExceptionReview:
+    order_no: str
+    action: str
+    channel: str
+    sales: str
+    customer: str
+    reason: str
 
 
 @dataclass
@@ -962,7 +1071,7 @@ def _traffic_in_range(t: TrafficRow, store: str, sales: str, month_begin: date, 
 
 
 def _traffic_row_key(t: TrafficRow) -> tuple[str, str]:
-    return (_norm(t.customer), t.add_date.isoformat() if t.add_date else "")
+    return (_norm_traffic_customer(t.customer), t.add_date.isoformat() if t.add_date else "")
 
 
 @dataclass
@@ -1048,7 +1157,7 @@ def compare_traffic_cross(
         for key in sorted(overlap_keys):
             ta, tb = a05_by_key[key], a060x_by_key[key]
             la, lb = str(ta.level or "").strip(), str(tb.level or "").strip()
-            if la != lb:
+            if not levels_equivalent(la, lb):
                 field_mismatch += 1
                 details.append(
                     TrafficCrossDetail(
@@ -1075,14 +1184,14 @@ def compare_traffic_cross(
         a060x_cust_dates: dict[str, list[TrafficRow]] = {}
         for k in a05_only_keys:
             c = a05_by_key[k].customer
-            a05_cust_dates.setdefault(_norm(c), []).append(a05_by_key[k])
+            a05_cust_dates.setdefault(_norm_traffic_customer(c), []).append(a05_by_key[k])
         for k in a060x_only_keys:
             c = a060x_by_key[k].customer
-            a060x_cust_dates.setdefault(_norm(c), []).append(a060x_by_key[k])
+            a060x_cust_dates.setdefault(_norm_traffic_customer(c), []).append(a060x_by_key[k])
 
         for key in sorted(a05_only_keys):
             ta = a05_by_key[key]
-            nc = _norm(ta.customer)
+            nc = _norm_traffic_customer(ta.customer)
             if nc in a060x_cust_dates:
                 tb = a060x_cust_dates[nc][0]
                 details.append(
@@ -1128,7 +1237,7 @@ def compare_traffic_cross(
 
         for key in sorted(a060x_only_keys):
             tb = a060x_by_key[key]
-            nc = _norm(tb.customer)
+            nc = _norm_traffic_customer(tb.customer)
             if nc in a05_cust_dates:
                 continue
             peer = a05_source_desc if a05 else "（该店铺无 A05 新流量表）"
@@ -1258,10 +1367,14 @@ def generate_conversion_table(
     brands: dict,
     cfg: dict,
     api: YouroApi,
-) -> tuple[list[list[Any]], list[OrderMetrics]]:
+) -> tuple[list[list[Any]], list[OrderMetrics], list[ExceptionReview]]:
     conv = cfg.get("conversion") or {}
     month_begin, month_end, _ = conversion_range(cfg)
     sales_map = cfg.get("sales_name_map", {})
+    exceptions = cfg.get("_exceptions") or {}
+    exclude_orders = conversion_exclude_order_nos(exceptions)
+    channel_overrides = conversion_channel_override_map(exceptions)
+    applied_exceptions: list[ExceptionReview] = []
 
     metrics: list[OrderMetrics] = []
     for sale in month_sales:
@@ -1270,13 +1383,44 @@ def generate_conversion_table(
         od = parse_api_date(sale["orderDate"])
         if od < month_begin or od > month_end:
             continue
+        order_no = str(sale.get("orderNo", ""))
         sales_name = normalize_sales(sale.get("createBy", ""), sales_map)
         customer = str(sale.get("customerName", ""))
+        if order_no in exclude_orders:
+            entry = next(
+                (e for e in exceptions.get("conversion_excludes", []) if str(e.get("order_no")) == order_no),
+                {},
+            )
+            applied_exceptions.append(
+                ExceptionReview(
+                    order_no=order_no,
+                    action="exclude",
+                    channel="",
+                    sales=str(entry.get("sales") or sales_name),
+                    customer=str(entry.get("customer") or customer),
+                    reason=str(entry.get("reason") or "转化表排除"),
+                )
+            )
+            continue
         a02 = a02_match.get((od.isoformat(), _norm(sales_name), _norm(customer)))
         store = resolve_store(a02, sale)
         traffic = find_traffic(traffic_rows, sales_name, customer, od, store)
         purchaser = api.get_purchaser_order(sale["orderNo"])
-        metrics.append(compute_order_metrics(sale, purchaser, a02, traffic, brands, cfg))
+        m = compute_order_metrics(sale, purchaser, a02, traffic, brands, cfg)
+        if order_no in channel_overrides:
+            ov = channel_overrides[order_no]
+            m.channel = str(ov["channel"]).lower()
+            applied_exceptions.append(
+                ExceptionReview(
+                    order_no=order_no,
+                    action="channel_override",
+                    channel=m.channel,
+                    sales=sales_name,
+                    customer=customer,
+                    reason=str(ov.get("reason") or ""),
+                )
+            )
+        metrics.append(m)
 
     rows_out: list[list[Any]] = []
     totals = {"I": 0.0, "J": 0.0, "M": 0.0, "N": 0.0, "Q": 0.0, "R": 0.0}
@@ -1372,7 +1516,7 @@ def generate_conversion_table(
     ]
     rows_out.append(total_row)
     unclassified = [m for m in metrics if m.channel == "unclassified"]
-    return rows_out, unclassified
+    return rows_out, unclassified, applied_exceptions
 
 
 def process_week_order(
@@ -1408,6 +1552,16 @@ def main() -> int:
     data_dir = root / cfg["paths"]["data_dir"]
     out_dir = root / cfg["paths"]["output_dir"]
     paths = cfg["paths"]
+    cfg["_a07_intent"] = load_a07_intent_keys(
+        data_dir, paths.get("a07", "A07-意向和高潜订单表.xlsx")
+    )
+    exc_path = root / paths.get("exceptions", "exceptions.yaml")
+    cfg["_exceptions"] = load_exceptions(exc_path)
+    exc_n = len(cfg["_exceptions"].get("conversion_excludes", [])) + len(
+        cfg["_exceptions"].get("conversion_channel_overrides", [])
+    )
+    if exc_n:
+        print(f"  conversion exceptions: {exc_n} entries ({exc_path.name})")
 
     api = YouroApi(cfg["api"]["base_url"], cfg["api"]["jsessionid"])
     begin = cfg["week"]["begin_date"]
@@ -1491,11 +1645,18 @@ def main() -> int:
         mb, me = month_begin.isoformat(), month_end.isoformat()
         print(f"\nGenerating conversion table {conversion_title_full(title)}...")
         month_sales = api.list_sales_orders(mb, me)
-        conversion_rows, unclassified = generate_conversion_table(
+        conversion_rows, unclassified, applied_exceptions = generate_conversion_table(
             month_sales, a02_match, traffic_rows, brands, cfg, api
         )
         write_conversion_csv(out_dir / "2.新客转化表.csv", title, conversion_rows)
         print(f"  {out_dir / '2.新客转化表.csv'} ({len(conversion_rows)} rows, {mb} ~ {me})")
+        if applied_exceptions:
+            write_review_csv(
+                out_dir / "转化表例外应用.csv",
+                ["order_no", "action", "channel", "sales", "customer", "reason"],
+                applied_exceptions,
+            )
+            print(f"  {out_dir / '转化表例外应用.csv'} ({len(applied_exceptions)} applied from exceptions.yaml)")
         write_review_csv(
             out_dir / "渠道未归类.csv",
             [

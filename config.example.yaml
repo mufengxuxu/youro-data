@@ -22,6 +22,8 @@ paths:
   # weekly_ronchamp_xlsx: "2026年Ronchamp运营数据周分析表（6.22—6.28）.xlsx"
   a02: A02-财务收支.xlsx
   a05: A05-销售管理表.xlsx
+  a07: A07-意向和高潜订单表.xlsx
+  exceptions: exceptions.yaml
   salesperson_globs:
     - "A-0601-*数据汇总表.xlsx"
     - "A-0601-*重点客户跟进表.xlsx"

@@ -1,0 +1,21 @@
+# 转化表单次例外（不改 A02 / A05 / A060x 等源 Excel）
+#
+# 原则：
+# - 通用规则写在脚本与 docs/业务规则汇总.md
+# - 个案、非共性情况在此按 order_no 单独登记，仅对 listed 订单生效
+# - 新周期若有新例外，追加条目；旧条目可保留作审计或删除
+#
+# 复制为 exceptions.yaml，并在 config.yaml 中 paths.exceptions 指向该文件
+
+conversion_excludes:
+  # 不进 2.新客转化表（C/G/L/P 均不计）；周新客订单表 CSV 仍正常输出
+  # - order_no: GR260616644
+  #   sales: Grace
+  #   customer: Hema latha-G
+  #   reason: 非新客，转化表排除
+
+conversion_channel_overrides:
+  # 覆盖自动渠道分类（tm / rfq / other）
+  # - order_no: EN260621562
+  #   channel: tm
+  #   reason: 25/1/3 西门子电源模块流量（源表未录入）

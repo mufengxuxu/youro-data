@@ -21,6 +21,7 @@ cp config.example.yaml config.yaml
 | `review/6.周新客订单表-Youro.csv` | 屿路当周首单（22 列） |
 | `review/4.周新客订单表-RonChamp.csv` | 镕川当周首单（22 列） |
 | `review/2.新客转化表.csv` | **当月累计**新客转化（月初 ~ `week.end_date`） |
+| `review/转化表例外应用.csv` | 本次从 `exceptions.yaml` 应用的转化表个案 |
 | `review/渠道未归类.csv` | 无流量且非明确「其他」的首单，计入 C 但不进 P 列 |
 | `review/流量交叉核对-汇总.csv` | A05 vs A060x 新流量数量交叉对比（按店铺/业务员） |
 | `review/流量交叉核对-明细.csv` | 两边不一致的客户明细（仅A05/仅A060x/字段差） |
@@ -33,12 +34,15 @@ cp config.example.yaml config.yaml
 
 **转化表日期**：自动取 `week.end_date` 所在月的 **1 日 ~ week.end_date**（例：周次 6.22—6.28 → 转化表标题 `6.1 - 6.28`）。
 
+**转化表个案**：不改源 Excel；非共性订单在 `exceptions.yaml` 按 `order_no` 登记（见 [`docs/业务规则汇总.md`](docs/业务规则汇总.md) §11）。
+
 ## 数据流
 
 1. `curl-orders.sh` 同源 API → 上周 `firstOrder=Y` 销售订单
 2. 逐单 `curl-purchaser.sh` 同源 API → 采购金额
 3. `A02` / `A05` / `A-060x` Excel → 流量、财务校验、店铺归属
 4. 映射规则见：
+   - **[`docs/业务规则汇总.md`](docs/业务规则汇总.md)** — 已确认业务规则总览（优先阅读）
    - [`docs/周新客订单表-字段映射方案.md`](docs/周新客订单表-字段映射方案.md)
    - [`docs/新客转化表-字段映射方案.md`](docs/新客转化表-字段映射方案.md)
 
