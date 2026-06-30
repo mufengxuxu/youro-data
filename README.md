@@ -30,11 +30,12 @@ cp config.example.yaml config.yaml
 | `review/Step3-{Youro\|RonChamp}-周流量品牌-MMDD-MMDD.csv` | **步骤③** 品牌流量 + **其中变频器** + 产品汇总行「变频器」 |
 | `review/Step3-{Youro\|RonChamp}-其它杂类明细-MMDD-MMDD.csv` | 步骤③「其它杂类」逐条明细 |
 | `review/Step3-{Youro\|RonChamp}-新流量地区-MMDD-MMDD.csv` | 步骤③ 国家排名 |
-| `review/Step4-{Youro\|RonChamp}-业务流程-MMDD-MMDD.csv` | **步骤④** 业务流程单行（TM/L1+/L3+/新客订单；Youro 含 A07 意向/高潜） |
-| `review/Step4-Youro-意向订单明细-MMDD-MMDD.csv` | A07 当周意向订单明细（仅 Youro） |
-| `review/Step4-Youro-高潜明细-MMDD-MMDD.csv` | A07 当周高潜订单明细（仅 Youro） |
+| `review/Step4-{Youro\|RonChamp}-业务流程-MMDD-MMDD.csv` | **步骤④** 业务流程单行（TM/L1+/L3+/新客订单 + A07 意向/高潜，按店拆分） |
+| `review/Step4-{Youro\|RonChamp}-意向订单明细-MMDD-MMDD.csv` | A07 当周意向订单明细（按 A05 推断店铺） |
+| `review/Step4-{Youro\|RonChamp}-高潜明细-MMDD-MMDD.csv` | A07 当周高潜订单明细（按 A05 推断店铺） |
+| `review/Step4-A07-店铺推断-MMDD-MMDD.csv` | A07 各行店铺归属及推断来源 |
 | `review/Step7-{Youro\|RonChamp}-周数据总览-MMDD-MMDD.csv` | **步骤⑦** 总览（Youro→Sheet 3；RonChamp→Sheet 1，均与 Step6 同店同源） |
-| `review/Step6-店铺汇总-MMDD-MMDD.csv` | **步骤⑥** Sheet 1 双店指标（A03/A04 基础+运营 + 周新客订单段；**截止意向仅 Youro**） |
+| `review/Step6-店铺汇总-MMDD-MMDD.csv` | **步骤⑥** Sheet 1 双店指标（A03/A04 基础+运营 + 周新客订单段 + **截止意向按店**） |
 
 **默认只出 CSV**，周分析 xlsx 由人工粘贴更新。需要脚本写回 xlsx 时使用 `--write-xlsx`。
 

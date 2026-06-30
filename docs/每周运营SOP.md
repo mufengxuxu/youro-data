@@ -55,7 +55,7 @@ python generate_weekly_new_orders.py --no-conversion
 | 1 | 6.周新客订单表 | `6.周新客订单表-Youro.csv` |
 | 2 | 2.新客转化表 | `2.新客转化表.csv`（**整表覆盖**，改标题为 `6.1 - 当周末`） |
 | 3 | 4.周流量分析（品牌） | `Step3-Youro-周流量品牌-*.csv` |
-| 4 | 7.新流量地区分布 | `Step3-Youro-新流量地区-*.csv` |
+| 4 | 7.新流量地区分布 | `Step3-Youro-新流量地区-*.csv`（**「共XX个」= 周总流量合计**；**印孟巴合计** 行填印度+孟加拉+巴基斯坦） |
 | 5 | 5.周数据表（业务流程） | `Step4-Youro-业务流程-*.csv` |
 | 6 | 1.店铺汇总 | `Step6-店铺汇总-*.csv` → **Youro 列** |
 | 7 | 3.周数据表（总览） | `Step7-Youro-周数据总览-*.csv` |
@@ -64,9 +64,9 @@ python generate_weekly_new_orders.py --no-conversion
 
 | 顺序 | Sheet | review CSV |
 |------|-------|------------|
-| 1 | 4.周新客订单表 | `4.周新客订单表-RonChamp.csv` |
+| 1 | 4.周新客订单表 | `4.周新客订单表-RonChamp.csv`（含 Grace 镕川流量单，如 derby kembo） |
 | 2 | 2.周流量分析（品牌） | `Step3-RonChamp-周流量品牌-*.csv` |
-| 3 | 5.新流量地区分布 | `Step3-RonChamp-新流量地区-*.csv` |
+| 3 | 5.新流量地区分布 | `Step3-RonChamp-新流量地区-*.csv`（**「共XX个」= 周总流量合计**；**印孟巴合计** 行） |
 | 4 | 3.周数据表（业务流程） | `Step4-RonChamp-业务流程-*.csv` |
 | 5 | 1.周数据表（总览） | `Step7-RonChamp-周数据总览-*.csv` |
 | — | 1.周数据表（总览） | **买家周注销账号（个）** → **国际站后台手填**（常为 0） |
@@ -88,7 +88,7 @@ python generate_weekly_new_orders.py --no-conversion
 
 | 项 | 处理 |
 |----|------|
-| A07 意向/高潜 | **不拆店**；截止意向 / 业务流程意向段 **仅填 Youro** |
+| A07 意向/高潜 | 按 **A05 流量表店铺** 拆分到 Youro / RonChamp（见业务规则 §10） |
 | RonChamp 买家周注销账号 | 阿里后台手填 |
 | RonChamp Sheet 6/7（工作汇总、上品计划） | 本 SOP 外 |
 

@@ -262,6 +262,16 @@ TRAFFIC_CUSTOMER_ALIASES = {
     "airo mafra": "jairo mafra",
 }
 
+# 地区分布：国家名合并（与周表习惯一致）
+COUNTRY_ALIASES = {
+    "印尼": "印度尼西亚",
+    "沙特": "沙特阿拉伯",
+    "孟加拉": "孟加拉国",
+}
+
+# 地区分布 · 印孟巴（印度 + 孟加拉 + 巴基斯坦）
+INMENGBA_COUNTRIES = frozenset({"印度", "孟加拉国", "巴基斯坦"})
+
 
 def _norm_traffic_customer(customer: str) -> str:
     n = _norm(customer)
@@ -727,9 +737,23 @@ def classify_channel(
     return "unclassified"
 
 
-def resolve_store(a02: A02OrderRow | None, sale: dict) -> str:
+DUAL_STORE_SALES = {_norm("Grace"), _norm("Lily")}
+
+
+def resolve_store(
+    a02: A02OrderRow | None,
+    sale: dict,
+    *,
+    traffic: TrafficRow | None = None,
+    sales_name: str = "",
+) -> str:
+    """Grace/Lily 双店业务员：有 A05 流量时以流量表店铺为准，否则 A02 所属店铺。"""
+    if _norm(sales_name) in DUAL_STORE_SALES and traffic and str(traffic.shop or "").strip():
+        return shop_to_store(traffic.shop)
     if a02 and str(a02.shop or "").strip():
         return shop_to_store(a02.shop)
+    if traffic and str(traffic.shop or "").strip():
+        return shop_to_store(traffic.shop)
     company = sale.get("company")
     if company in (1, "1"):
         return STORE_RONCHAMP
@@ -764,7 +788,7 @@ def compute_order_metrics(
     payment_rmb = float(row[8]) if row[8] != "" else 0.0
     gross = float(row[16]) if row[16] != "" else None
     margin = float(row[17]) if row[17] != "" else None
-    store = resolve_store(a02, sale)
+    store = resolve_store(a02, sale, traffic=traffic, sales_name=sales)
     channel = classify_channel(
         traffic, sale, sales_name=sales, store=store, a07_intent=cfg.get("_a07_intent")
     )
@@ -1047,6 +1071,26 @@ FLOW_ROW_HEADERS = [
 ]
 
 
+def normalize_country(country: str) -> str:
+    c = str(country or "").replace("\n", "").strip()
+    return COUNTRY_ALIASES.get(c, c)
+
+
+def aggregate_traffic_countries(traffic_rows: list[TrafficRow]) -> Counter:
+    countries: Counter = Counter()
+    for t in traffic_rows:
+        c = normalize_country(str(t.country or ""))
+        if c:
+            countries[c] += 1
+    return countries
+
+
+def inmengba_stats(countries: Counter, total: int) -> tuple[int, float | str]:
+    cnt = sum(countries.get(c, 0) for c in INMENGBA_COUNTRIES)
+    ratio = round(cnt / total, 6) if total else ""
+    return cnt, ratio
+
+
 def is_inverter_category(category: str) -> bool:
     c = str(category or "").lower().replace("\n", " ")
     return any(kw in c for kw in INVERTER_CATEGORY_KWS)
@@ -1089,34 +1133,105 @@ def week_tm_traffic(
     ]
 
 
-def parse_a07_week_block(sheet_rows: list[list[Any]], week_labels: list[str]) -> list[list[Any]]:
+def parse_a07_week_items(sheet_rows: list[list[Any]], week_labels: list[str]) -> list[dict[str, Any]]:
+    """Parse A07 week block; fill-down 业务员 on continuation rows (empty col C)."""
     labels = {lbl.replace(" ", "") for lbl in week_labels}
-    items: list[list[Any]] = []
+    items: list[dict[str, Any]] = []
     started = False
+    cur_sales = ""
     for row in sheet_rows[3:]:
         d0 = str(row[0] or "").strip()
         d0c = d0.replace(" ", "")
         if d0c in labels:
             started = True
+            if len(row) > 2 and str(row[2] or "").strip():
+                cur_sales = str(row[2]).strip()
             customer = str(row[3] if len(row) > 3 else "").strip()
             if customer and customer not in ("无", "内容项", "客户名称"):
-                items.append(row)
+                items.append({"sales": cur_sales, "row": row})
             continue
         if started and d0 and d0c not in labels:
             if d0.startswith("本周合计"):
                 break
             break
         if started:
+            if len(row) > 2 and str(row[2] or "").strip():
+                cur_sales = str(row[2]).strip()
             customer = str(row[3] if len(row) > 3 else "").strip()
             if customer and customer not in ("无", "内容项", "客户名称"):
-                items.append(row)
+                items.append({"sales": cur_sales, "row": row})
     return items
 
 
-def load_a07_week_stats(a07_path: Path, week_labels: list[str]) -> dict[str, Any]:
-    empty = {
-        "intent_count": 0, "intent_new_count": 0, "intent_new_amount": 0.0,
-        "high_potential_count": 0, "intent_rows": [], "high_potential_rows": [],
+# A07 无店铺列时，业务员默认店（仅流量表未命中时使用）
+A07_SALES_DEFAULT_STORE = {
+    _norm("Sally"): STORE_RONCHAMP,
+    _norm("Ennerson"): STORE_YOURO,
+    _norm("Luck"): STORE_YOURO,
+    _norm("Cindy"): STORE_YOURO,
+    _norm("David"): STORE_YOURO,
+}
+
+
+def infer_a07_row_store(
+    sales: str, customer: str, traffic_rows: list[TrafficRow]
+) -> tuple[str, str]:
+    """Infer Youro/RonChamp from A05 traffic shop; return (store, source)."""
+    cn = _norm_traffic_customer(customer)
+    sn = _norm(sales)
+    stores: list[str] = []
+    for t in traffic_rows:
+        if not is_a05_traffic(t) or not t.shop:
+            continue
+        if _norm_traffic_customer(t.customer) != cn:
+            continue
+        if sn and _norm(t.sales) != sn:
+            continue
+        stores.append(shop_to_store(t.shop))
+    if stores:
+        return Counter(stores).most_common(1)[0][0], "traffic"
+    cust_stores: list[str] = []
+    for t in traffic_rows:
+        if not is_a05_traffic(t) or not t.shop:
+            continue
+        if _norm_traffic_customer(t.customer) == cn:
+            cust_stores.append(shop_to_store(t.shop))
+    if cust_stores:
+        return Counter(cust_stores).most_common(1)[0][0], "traffic_customer"
+    if sn in A07_SALES_DEFAULT_STORE:
+        return A07_SALES_DEFAULT_STORE[sn], "sales_default"
+    return STORE_YOURO, "unmatched"
+
+
+def _empty_a07_store_stats() -> dict[str, Any]:
+    return {
+        "intent_count": 0,
+        "intent_new_count": 0,
+        "intent_new_amount": 0.0,
+        "high_potential_count": 0,
+        "intent_rows": [],
+        "high_potential_rows": [],
+        "intent_details": [],
+        "high_potential_details": [],
+    }
+
+
+def load_a07_week_stats(
+    a07_path: Path, week_labels: list[str], traffic_rows: list[TrafficRow] | None = None
+) -> dict[str, Any]:
+    empty_store = _empty_a07_store_stats()
+    empty: dict[str, Any] = {
+        "intent_count": 0,
+        "intent_new_count": 0,
+        "intent_new_amount": 0.0,
+        "high_potential_count": 0,
+        "intent_rows": [],
+        "high_potential_rows": [],
+        "by_store": {
+            STORE_YOURO: dict(empty_store),
+            STORE_RONCHAMP: dict(empty_store),
+        },
+        "store_inferences": [],
     }
     if not a07_path.exists():
         return empty
@@ -1125,17 +1240,47 @@ def load_a07_week_stats(a07_path: Path, week_labels: list[str]) -> dict[str, Any
     hp_sheet = next((sheets[k] for k in sheets if "高潜" in k), None)
     if not intent_sheet:
         return empty
-    intent_rows = parse_a07_week_block(intent_sheet, week_labels)
-    hp_rows = parse_a07_week_block(hp_sheet, week_labels) if hp_sheet else []
-    new_rows = [r for r in intent_rows if str(r[5] if len(r) > 5 else "").strip() == "新"]
+    traffic_rows = traffic_rows or []
+    intent_items = parse_a07_week_items(intent_sheet, week_labels)
+    hp_items = parse_a07_week_items(hp_sheet, week_labels) if hp_sheet else []
+    by_store = {STORE_YOURO: _empty_a07_store_stats(), STORE_RONCHAMP: _empty_a07_store_stats()}
+    store_inferences: list[dict[str, str]] = []
+
+    for kind, items in (("intent", intent_items), ("high_potential", hp_items)):
+        for item in items:
+            sales = item["sales"]
+            row = item["row"]
+            customer = str(row[3] if len(row) > 3 else "").strip()
+            store, src = infer_a07_row_store(sales, customer, traffic_rows)
+            store_inferences.append({
+                "kind": kind, "sales": sales, "customer": customer, "store": store, "source": src,
+            })
+            bs = by_store[store]
+            if kind == "intent":
+                bs["intent_rows"].append(row)
+                bs["intent_details"].append({"sales": sales, "row": row, "store_source": src})
+                bs["intent_count"] += 1
+                if str(row[5] if len(row) > 5 else "").strip() == "新":
+                    bs["intent_new_count"] += 1
+                    bs["intent_new_amount"] = round(
+                        bs["intent_new_amount"] + (_float(row[9]) or 0), 2
+                    )
+            else:
+                bs["high_potential_rows"].append(row)
+                bs["high_potential_details"].append({"sales": sales, "row": row, "store_source": src})
+                bs["high_potential_count"] += 1
+
+    new_rows = [i["row"] for i in intent_items if str(i["row"][5] if len(i["row"]) > 5 else "").strip() == "新"]
     new_amt = sum(_float(r[9]) or 0 for r in new_rows)
     return {
-        "intent_count": len(intent_rows),
+        "intent_count": len(intent_items),
         "intent_new_count": len(new_rows),
         "intent_new_amount": round(new_amt, 2),
-        "high_potential_count": len(hp_rows),
-        "intent_rows": intent_rows,
-        "high_potential_rows": hp_rows,
+        "high_potential_count": len(hp_items),
+        "intent_rows": [i["row"] for i in intent_items],
+        "high_potential_rows": [i["row"] for i in hp_items],
+        "by_store": by_store,
+        "store_inferences": store_inferences,
     }
 
 
@@ -1187,7 +1332,7 @@ def generate_weekly_review_csvs(
 ) -> list[Path]:
     slug = period_slug(week_begin, week_end)
     a07_labels = a07_week_label_candidates(week_begin, week_end, period)
-    a07 = load_a07_week_stats(a07_path, a07_labels)
+    a07 = load_a07_week_stats(a07_path, a07_labels, traffic_rows)
     written: list[Path] = []
 
     for store, prefix, brand_list, cat_map, include_inv_row in (
@@ -1228,16 +1373,15 @@ def generate_weekly_review_csvs(
         )
         written.append(other_path)
 
-        countries: Counter = Counter()
-        for t in tm_rows:
-            c = str(t.country or "").replace("\n", "").strip()
-            if c:
-                countries[c] += 1
+        countries = aggregate_traffic_countries(tm_rows)
+        inmengba_cnt, inmengba_ratio = inmengba_stats(countries, total)
         region_path = out_dir / f"Step3-{prefix}-新流量地区-{slug}.csv"
         with region_path.open("w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
             w.writerow(["周期", period])
+            w.writerow(["周总流量合计", total])
             w.writerow(["共几个国家", len(countries)])
+            w.writerow(["印孟巴合计", inmengba_cnt, inmengba_ratio])
             w.writerow(["排名", "国家", "数量"])
             for i, (country, cnt) in enumerate(countries.most_common(), 1):
                 w.writerow([i, country, cnt])
@@ -1252,10 +1396,7 @@ def generate_weekly_review_csvs(
         l1 = sum(1 for t in tm_rows if is_l1plus(t.level))
         l3 = sum(1 for t in tm_rows if is_l3plus(t.level))
         order_cnt, order_amt, order_gross = summarize_weekly_order_rows(order_rows)
-        a07_use = a07 if store == STORE_YOURO else {
-            "intent_count": "", "intent_new_count": "", "intent_new_amount": "",
-            "high_potential_count": "", "intent_rows": [], "high_potential_rows": [],
-        }
+        bs = a07["by_store"][store]
         flow_path = out_dir / f"Step4-{prefix}-业务流程-{slug}.csv"
         write_csv(
             flow_path,
@@ -1263,50 +1404,68 @@ def generate_weekly_review_csvs(
             [[
                 period, tm, l1, round(l1 / tm, 6) if tm else "",
                 l3, round(l3 / tm, 6) if tm else "",
-                a07_use["high_potential_count"], a07_use["intent_count"],
-                a07_use["intent_new_count"], a07_use["intent_new_amount"],
+                bs["high_potential_count"], bs["intent_count"],
+                bs["intent_new_count"], bs["intent_new_amount"],
                 order_cnt, order_amt, order_gross, "",
             ]],
         )
         written.append(flow_path)
 
-    if a07["intent_rows"]:
-        intent_detail = out_dir / f"Step4-Youro-意向订单明细-{slug}.csv"
-        write_csv(
-            intent_detail,
-            ["sales", "customer", "country", "new_or_old", "level", "category", "amount_rmb"],
-            [
+    for store, prefix in ((STORE_YOURO, "Youro"), (STORE_RONCHAMP, "RonChamp")):
+        bs = a07["by_store"][store]
+        if bs["intent_details"]:
+            intent_detail = out_dir / f"Step4-{prefix}-意向订单明细-{slug}.csv"
+            write_csv(
+                intent_detail,
+                ["sales", "customer", "country", "new_or_old", "level", "category", "amount_rmb", "store_source"],
                 [
-                    str(r[2] if len(r) > 2 else ""),
-                    str(r[3] if len(r) > 3 else ""),
-                    str(r[4] if len(r) > 4 else ""),
-                    str(r[5] if len(r) > 5 else ""),
-                    str(r[6] if len(r) > 6 else ""),
-                    str(r[8] if len(r) > 8 else ""),
-                    r[9] if len(r) > 9 else "",
-                ]
-                for r in a07["intent_rows"]
+                    [
+                        d["sales"],
+                        str(r[3] if len(r) > 3 else ""),
+                        str(r[4] if len(r) > 4 else ""),
+                        str(r[5] if len(r) > 5 else ""),
+                        str(r[6] if len(r) > 6 else ""),
+                        str(r[8] if len(r) > 8 else ""),
+                        r[9] if len(r) > 9 else "",
+                        d["store_source"],
+                    ]
+                    for d in bs["intent_details"]
+                    for r in [d["row"]]
+                ],
+            )
+            written.append(intent_detail)
+        if bs["high_potential_details"]:
+            hp_detail = out_dir / f"Step4-{prefix}-高潜明细-{slug}.csv"
+            write_csv(
+                hp_detail,
+                ["sales", "customer", "country", "level", "category", "amount_rmb", "store_source"],
+                [
+                    [
+                        d["sales"],
+                        str(r[3] if len(r) > 3 else ""),
+                        str(r[4] if len(r) > 4 else ""),
+                        str(r[5] if len(r) > 5 else ""),
+                        str(r[7] if len(r) > 7 else ""),
+                        r[8] if len(r) > 8 else "",
+                        d["store_source"],
+                    ]
+                    for d in bs["high_potential_details"]
+                    for r in [d["row"]]
+                ],
+            )
+            written.append(hp_detail)
+
+    if a07["store_inferences"]:
+        infer_path = out_dir / f"Step4-A07-店铺推断-{slug}.csv"
+        write_csv(
+            infer_path,
+            ["kind", "sales", "customer", "store", "source"],
+            [
+                [inf["kind"], inf["sales"], inf["customer"], inf["store"], inf["source"]]
+                for inf in a07["store_inferences"]
             ],
         )
-        written.append(intent_detail)
-    if a07["high_potential_rows"]:
-        hp_detail = out_dir / f"Step4-Youro-高潜明细-{slug}.csv"
-        write_csv(
-            hp_detail,
-            ["sales", "customer", "country", "level", "category", "amount_rmb"],
-            [
-                [
-                    str(r[2] if len(r) > 2 else ""),
-                    str(r[3] if len(r) > 3 else ""),
-                    str(r[4] if len(r) > 4 else ""),
-                    str(r[5] if len(r) > 5 else ""),
-                    str(r[7] if len(r) > 7 else ""),
-                    r[8] if len(r) > 8 else "",
-                ]
-                for r in a07["high_potential_rows"]
-            ],
-        )
-        written.append(hp_detail)
+        written.append(infer_path)
 
     return written
 
@@ -1452,14 +1611,24 @@ def apply_shop_order_stats(
     stats["周新客流量毛利率"] = _margin_pct(order_gross, order_amt) if order_amt else ""
 
 
-def apply_a07_intent_to_youro(
-    youro_stats: dict[str, Any], a07_path: Path, week_begin: date, week_end: date, period: str
+def apply_a07_intent_by_store(
+    youro_stats: dict[str, Any],
+    ronchamp_stats: dict[str, Any],
+    a07_path: Path,
+    week_begin: date,
+    week_end: date,
+    period: str,
+    traffic_rows: list[TrafficRow],
 ) -> None:
-    """A07 不拆店：当周新客意向全部计入 Youro，RonChamp 留空。"""
+    """A07 新客意向按 A05 流量表店铺归属拆分到 Youro / RonChamp。"""
     labels = a07_week_label_candidates(week_begin, week_end, period)
-    a07 = load_a07_week_stats(a07_path, labels)
-    youro_stats["截止当前意向订单数"] = a07["intent_new_count"] or 0
-    youro_stats["截止当前意向订单金额"] = a07["intent_new_amount"] or 0
+    a07 = load_a07_week_stats(a07_path, labels, traffic_rows)
+    ys = a07["by_store"][STORE_YOURO]
+    rs = a07["by_store"][STORE_RONCHAMP]
+    youro_stats["截止当前意向订单数"] = ys["intent_new_count"] or 0
+    youro_stats["截止当前意向订单金额"] = ys["intent_new_amount"] or 0
+    ronchamp_stats["截止当前意向订单数"] = rs["intent_new_count"] or 0
+    ronchamp_stats["截止当前意向订单金额"] = rs["intent_new_amount"] or 0
 
 
 STEP7_METRICS = [
@@ -1490,14 +1659,15 @@ def build_shop_summary_pair(
     week_end: date,
     youro_order_rows: list[list[Any]],
     ronchamp_order_rows: list[list[Any]],
+    traffic_rows: list[TrafficRow],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     youro = load_shop_week_stats(a03_path, week_begin, week_end)
     ronchamp = load_shop_week_stats(a04_path, week_begin, week_end)
     apply_shop_order_stats(youro, youro_order_rows)
     apply_shop_order_stats(ronchamp, ronchamp_order_rows)
-    apply_a07_intent_to_youro(youro, a07_path, week_begin, week_end, period)
-    ronchamp["截止当前意向订单数"] = ""
-    ronchamp["截止当前意向订单金额"] = ""
+    apply_a07_intent_by_store(
+        youro, ronchamp, a07_path, week_begin, week_end, period, traffic_rows
+    )
     return youro, ronchamp
 
 
@@ -1939,8 +2109,7 @@ def generate_conversion_table(
             )
             continue
         a02 = a02_match.get((od.isoformat(), _norm(sales_name), _norm(customer)))
-        store = resolve_store(a02, sale)
-        traffic = find_traffic(traffic_rows, sales_name, customer, od, store)
+        traffic = find_traffic(traffic_rows, sales_name, customer, od, None)
         purchaser = api.get_purchaser_order(sale["orderNo"])
         m = compute_order_metrics(sale, purchaser, a02, traffic, brands, cfg)
         if order_no in channel_overrides:
@@ -2069,8 +2238,8 @@ def process_week_order(
     sales_name = normalize_sales(sale.get("createBy", ""), cfg.get("sales_name_map", {}))
     customer = str(sale.get("customerName", ""))
     a02 = a02_match.get((od.isoformat(), _norm(sales_name), _norm(customer)))
-    store = resolve_store(a02, sale)
-    traffic = find_traffic(traffic_rows, sales_name, customer, od, store)
+    traffic = find_traffic(traffic_rows, sales_name, customer, od, None)
+    store = resolve_store(a02, sale, traffic=traffic, sales_name=sales_name)
     row, pr, br = build_row(sale, purchaser, a02, traffic, brands, cfg)
     return store, row, pr, br
 
@@ -2188,6 +2357,7 @@ def main() -> int:
         week_end,
         youro_rows,
         ronchamp_rows,
+        traffic_rows,
     )
     step6_path = generate_step6_shop_summary_csv(
         out_dir, period, week_begin, week_end, youro_shop, ronchamp_shop
