@@ -21,6 +21,8 @@ paths:
   # weekly_youro_xlsx: "2026年Youro运营数据周分析表（6.22—6.28）.xlsx"
   # weekly_ronchamp_xlsx: "2026年Ronchamp运营数据周分析表（6.22—6.28）.xlsx"
   a02: A02-财务收支.xlsx
+  a03: A03-26年Youro综合运营数据表.xlsx
+  a04: A04-26年Ronchamp运营数据表.xlsx
   a05: A05-销售管理表.xlsx
   a07: A07-意向和高潜订单表.xlsx
   exceptions: exceptions.yaml

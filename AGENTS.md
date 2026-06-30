@@ -12,7 +12,7 @@
 ## 脚本入口
 
 ```bash
-python generate_weekly_new_orders.py          # 默认：CSV + 转化表 + 交叉核对 + Step3/4
+python generate_weekly_new_orders.py          # 默认：CSV + 转化表 + 交叉核对 + Step3/4/6
 python generate_weekly_new_orders.py --write-xlsx   # 可选写回 xlsx
 ```
 

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Step6 店铺汇总 CSV（A03/A04 + 周新客；A07 截止意向仅 Youro）
 - `generate_weekly_new_orders.py` 自动生成 **步骤③/④** 核对 CSV（品牌流量、地区分布、业务流程、A07 意向/高潜明细）
 - `exceptions.yaml` / `exceptions.example.yaml` — 转化表单次例外（按 order_no，不改源 Excel）
 - `review/转化表例外应用.csv` 输出

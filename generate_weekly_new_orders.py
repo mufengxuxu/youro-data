@@ -1311,6 +1311,184 @@ def generate_weekly_review_csvs(
     return written
 
 
+# ---------------------------------------------------------------------------
+# Step 6 · Sheet 1 店铺汇总（A03/A04 + 周新客订单）
+# ---------------------------------------------------------------------------
+
+SHOP_MONTH_SHEET = "{month}月店铺数据"
+
+STEP6_METRICS = [
+    "现有产品数量（个）",
+    "在架商品数量（个）",
+    "周新上架产品数量（个）",
+    "周优化产品数量（个）",
+    "现有优品数量（个）",
+    "周累计曝光量（个）",
+    "周访客人数（个）",
+    "周累计点击量（个）",
+    "周TM+询盘数量（个）",
+    "周L1+数量（个）",
+    "周L1+买家占比率",
+    "全站推周平均转化成本（元）",
+    "全站推周累计转化人数",
+    "全站推周曝光",
+    "全站推周点击次数",
+    "全站推周平均点击成本（元）",
+    "周累计自然曝光量（个）",
+    "周累计自然点击量（个）",
+    "周平均自然点击率",
+    "周广告花费（元）",
+    "周单个获客成本（元）",
+    "截止当前意向订单数",
+    "截止当前意向订单金额",
+    "周新客订单成交数量（个）",
+    "周新客流量成交率",
+    "周新客流量成交销售额（元）",
+    "周新客流量毛利（元）",
+    "周新客流量毛利率",
+]
+
+
+def parse_shop_day_cell(value: Any) -> date | None:
+    s = str(value or "").strip()
+    if not s or s.startswith("合计"):
+        return None
+    parts = s.split(".")
+    if len(parts) != 2:
+        return None
+    try:
+        return date(2026, int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def _shop_week_rows(
+    sheet_rows: list[list[Any]], week_begin: date, week_end: date
+) -> list[list[Any]]:
+    out: list[list[Any]] = []
+    for row in sheet_rows[3:]:
+        d = parse_shop_day_cell(row[0] if row else None)
+        if d and week_begin <= d <= week_end:
+            out.append(row)
+    return out
+
+
+def _shop_sum_col(rows: list[list[Any]], idx: int) -> float:
+    return sum(_float(r[idx]) or 0 for r in rows if len(r) > idx)
+
+
+def _shop_last_col(rows: list[list[Any]], idx: int) -> float | None:
+    for row in reversed(rows):
+        if len(row) > idx:
+            v = _float(row[idx])
+            if v is not None:
+                return v
+    return None
+
+
+def aggregate_shop_week_stats(
+    sheet_rows: list[list[Any]], week_begin: date, week_end: date
+) -> dict[str, Any]:
+    week = _shop_week_rows(sheet_rows, week_begin, week_end)
+    if not week:
+        return {}
+    tm = _shop_sum_col(week, 13) + _shop_sum_col(week, 14)
+    l1 = _shop_sum_col(week, 15)
+    ad_spend = _shop_sum_col(week, 17)
+    qz_spend = _shop_sum_col(week, 27)
+    qz_conv = _shop_sum_col(week, 29)
+    qz_click = _shop_sum_col(week, 31)
+    nat_exp = _shop_sum_col(week, 34)
+    nat_click = _shop_sum_col(week, 35)
+    return {
+        "现有产品数量（个）": _shop_last_col(week, 3),
+        "在架商品数量（个）": _shop_last_col(week, 4),
+        "周新上架产品数量（个）": _shop_sum_col(week, 5),
+        "周优化产品数量（个）": _shop_sum_col(week, 6),
+        "现有优品数量（个）": _shop_last_col(week, 7),
+        "周累计曝光量（个）": _shop_sum_col(week, 8),
+        "周访客人数（个）": _shop_sum_col(week, 11),
+        "周累计点击量（个）": _shop_sum_col(week, 9),
+        "周TM+询盘数量（个）": tm,
+        "周L1+数量（个）": l1,
+        "周L1+买家占比率": round(l1 / tm, 12) if tm else "",
+        "全站推周平均转化成本（元）": round(qz_spend / qz_conv, 12) if qz_conv else "",
+        "全站推周累计转化人数": qz_conv or "",
+        "全站推周曝光": _shop_sum_col(week, 30) or "",
+        "全站推周点击次数": qz_click or "",
+        "全站推周平均点击成本（元）": round(qz_spend / qz_click, 12) if qz_click else "",
+        "周累计自然曝光量（个）": nat_exp or "",
+        "周累计自然点击量（个）": nat_click or "",
+        "周平均自然点击率": round(nat_click / nat_exp, 12) if nat_exp else "",
+        "周广告花费（元）": round(ad_spend, 2) if ad_spend else "",
+        "周单个获客成本（元）": round(ad_spend / tm, 12) if tm else "",
+    }
+
+
+def load_shop_week_stats(
+    xlsx_path: Path, week_begin: date, week_end: date
+) -> dict[str, Any]:
+    if not xlsx_path.exists():
+        return {}
+    sheet_name = SHOP_MONTH_SHEET.format(month=week_end.month)
+    sheets = read_xlsx_rows(xlsx_path)
+    if sheet_name not in sheets:
+        return {}
+    return aggregate_shop_week_stats(sheets[sheet_name], week_begin, week_end)
+
+
+def apply_shop_order_stats(
+    stats: dict[str, Any], order_rows: list[list[Any]]
+) -> None:
+    order_cnt, order_amt, order_gross = summarize_weekly_order_rows(order_rows)
+    tm = stats.get("周TM+询盘数量（个）") or 0
+    stats["周新客订单成交数量（个）"] = order_cnt
+    stats["周新客流量成交率"] = round(order_cnt / tm, 12) if tm else ""
+    stats["周新客流量成交销售额（元）"] = order_amt
+    stats["周新客流量毛利（元）"] = order_gross
+    stats["周新客流量毛利率"] = _margin_pct(order_gross, order_amt) if order_amt else ""
+
+
+def apply_a07_intent_to_youro(
+    youro_stats: dict[str, Any], a07_path: Path, week_begin: date, week_end: date, period: str
+) -> None:
+    """A07 不拆店：当周新客意向全部计入 Youro，RonChamp 留空。"""
+    labels = a07_week_label_candidates(week_begin, week_end, period)
+    a07 = load_a07_week_stats(a07_path, labels)
+    youro_stats["截止当前意向订单数"] = a07["intent_new_count"] or 0
+    youro_stats["截止当前意向订单金额"] = a07["intent_new_amount"] or 0
+
+
+def generate_step6_shop_summary_csv(
+    out_dir: Path,
+    period: str,
+    week_begin: date,
+    week_end: date,
+    a03_path: Path,
+    a04_path: Path,
+    a07_path: Path,
+    youro_order_rows: list[list[Any]],
+    ronchamp_order_rows: list[list[Any]],
+) -> Path:
+    slug = period_slug(week_begin, week_end)
+    path = out_dir / f"Step6-店铺汇总-{slug}.csv"
+    youro = load_shop_week_stats(a03_path, week_begin, week_end)
+    ronchamp = load_shop_week_stats(a04_path, week_begin, week_end)
+    apply_shop_order_stats(youro, youro_order_rows)
+    apply_shop_order_stats(ronchamp, ronchamp_order_rows)
+    apply_a07_intent_to_youro(youro, a07_path, week_begin, week_end, period)
+    ronchamp["截止当前意向订单数"] = ""
+    ronchamp["截止当前意向订单金额"] = ""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["周期", period, period])
+        w.writerow(["指标", "Youro", "RonChamp"])
+        for metric in STEP6_METRICS:
+            w.writerow([metric, youro.get(metric, ""), ronchamp.get(metric, "")])
+    return path
+
+
 def patch_weekly_xlsx(
     xlsx_path: Path,
     new_rows: list[list[Any]],
@@ -1945,6 +2123,26 @@ def main() -> int:
     print("\nStep 3/4 review CSVs:")
     for p in review_paths:
         print(f"  {p}")
+
+    a03_path = data_dir / paths.get("a03", "A03-26年Youro综合运营数据表.xlsx")
+    a04_path = data_dir / paths.get("a04", "A04-26年Ronchamp运营数据表.xlsx")
+    step6_path = generate_step6_shop_summary_csv(
+        out_dir,
+        period,
+        week_begin,
+        week_end,
+        a03_path,
+        a04_path,
+        a07_path,
+        youro_rows,
+        ronchamp_rows,
+    )
+    print(f"\nStep 6 review CSV:")
+    print(f"  {step6_path}")
+    if not load_shop_week_stats(a03_path, week_begin, week_end):
+        print(f"  ⚠ Youro shop stats empty — check {a03_path.name} › {SHOP_MONTH_SHEET.format(month=week_end.month)}")
+    if not load_shop_week_stats(a04_path, week_begin, week_end):
+        print(f"  ⚠ RonChamp shop stats empty — check {a04_path.name} › {SHOP_MONTH_SHEET.format(month=week_end.month)}")
 
     if args.write_xlsx:
         youro_xlsx = paths.get("weekly_youro_xlsx") or paths.get("weekly_xlsx")
