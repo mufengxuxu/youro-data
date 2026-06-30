@@ -27,6 +27,12 @@ cp config.example.yaml config.yaml
 | `review/流量交叉核对-明细.csv` | 两边不一致的客户明细（仅A05/仅A060x/字段差） |
 | `review/采购核对.csv` | API vs A02 采购金额对比 |
 | `review/品牌复核.csv` | 品牌推断 + 置信度，供人工修正 |
+| `review/Step3-{Youro\|RonChamp}-周流量品牌-MMDD-MMDD.csv` | **步骤③** 品牌流量 + **其中变频器** + 产品汇总行「变频器」 |
+| `review/Step3-{Youro\|RonChamp}-其它杂类明细-MMDD-MMDD.csv` | 步骤③「其它杂类」逐条明细 |
+| `review/Step3-{Youro\|RonChamp}-新流量地区-MMDD-MMDD.csv` | 步骤③ 国家排名 |
+| `review/Step4-{Youro\|RonChamp}-业务流程-MMDD-MMDD.csv` | **步骤④** 业务流程单行（TM/L1+/L3+/新客订单；Youro 含 A07 意向/高潜） |
+| `review/Step4-Youro-意向订单明细-MMDD-MMDD.csv` | A07 当周意向订单明细（仅 Youro） |
+| `review/Step4-Youro-高潜明细-MMDD-MMDD.csv` | A07 当周高潜订单明细（仅 Youro） |
 
 **默认只出 CSV**，周分析 xlsx 由人工粘贴更新。需要脚本写回 xlsx 时使用 `--write-xlsx`。
 

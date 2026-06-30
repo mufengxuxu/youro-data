@@ -4,6 +4,7 @@
 
 ### Added
 
+- `generate_weekly_new_orders.py` 自动生成 **步骤③/④** 核对 CSV（品牌流量、地区分布、业务流程、A07 意向/高潜明细）
 - `exceptions.yaml` / `exceptions.example.yaml` — 转化表单次例外（按 order_no，不改源 Excel）
 - `review/转化表例外应用.csv` 输出
 - `docs/业务规则汇总.md` — 汇总店铺拆分、A05/A060x 交叉核对、渠道分类、Grace/Lily 双店表等已确认规则

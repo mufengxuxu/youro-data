@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import re
+from collections import Counter
 import sys
 import urllib.parse
 import urllib.request
@@ -1006,6 +1007,310 @@ def write_review_csv(path: Path, headers: list[str], objects: list[Any]) -> None
     write_csv(path, headers, rows)
 
 
+# ---------------------------------------------------------------------------
+# Weekly review CSVs (Step 3 traffic / Step 4 business flow)
+# ---------------------------------------------------------------------------
+
+def period_slug(begin: date, end: date) -> str:
+    return f"{begin.month:02d}{begin.day:02d}-{end.month:02d}{end.day:02d}"
+
+
+def a07_week_label_candidates(begin: date, end: date, period: str) -> list[str]:
+    raw = f"{begin.month}.{begin.day}-{end.month}.{end.day}"
+    compact = period.replace(" ", "")
+    return list(dict.fromkeys([raw, compact, period]))
+
+
+INVERTER_CATEGORY_KWS = ("变频器", "inverter", "vfd", "变频", "frequency inverter")
+
+YOURO_BRAND_SHEET = ["台达", "SEW", "西门子", "丹佛斯", "三菱", "Yaskawa", "Omron", "LS", "其它杂类"]
+YOURO_BRAND_CAT = {
+    "台达": ["台达", "delta"], "SEW": ["sew"], "西门子": ["西门子", "siemens", "电源-si"],
+    "丹佛斯": ["丹佛斯", "danfoss"], "三菱": ["三菱", "mitsubishi"],
+    "Yaskawa": ["yaskawa", "安川"], "Omron": ["omron", "欧姆龙"], "LS": ["ls", "ls电气"],
+}
+RONCHAMP_BRAND_SHEET = [
+    "CHINT", "Delta", "SEW", "Omron", "SMC", "Festo", "IFM", "Sick", "Baumer",
+    "HEIDENHAIN", "Leuze", "Beckhoff", "Konecranes", "ASCO", "其它杂类",
+]
+RONCHAMP_BRAND_CAT = {
+    "CHINT": ["chint", "正泰"], "Delta": ["delta", "台达"], "SEW": ["sew"],
+    "Omron": ["omron", "欧姆龙"], "SMC": ["smc"], "Festo": ["festo"], "IFM": ["ifm"],
+    "Sick": ["sick"], "Baumer": ["baumer"], "HEIDENHAIN": ["heidenhain"],
+    "Leuze": ["leuze"], "Beckhoff": ["beckhoff"], "Konecranes": ["konecranes"], "ASCO": ["asco"],
+}
+
+FLOW_ROW_HEADERS = [
+    "日期", "TM/询盘新流量", "L1+数量", "L1+占比率", "L3+数量", "L3+占比率",
+    "高潜客户数量", "意向订单数量", "新客意向订单数", "新客意向订单金额",
+    "新客订单数量", "新客订单金额", "新客毛利润", "备注",
+]
+
+
+def is_inverter_category(category: str) -> bool:
+    c = str(category or "").lower().replace("\n", " ")
+    return any(kw in c for kw in INVERTER_CATEGORY_KWS)
+
+
+def is_l3plus(level: Any) -> bool:
+    s = str(level or "").strip().upper().replace(" ", "")
+    return s.startswith("L3") or s.startswith("L4") or s in ("L3+", "L4+")
+
+
+def is_tm_inquiry_traffic(t: TrafficRow) -> bool:
+    if is_alan_assigned(t):
+        return False
+    tt = str(t.traffic_type or "").upper()
+    return "TM" in tt or "询盘" in str(t.traffic_type or "")
+
+
+def map_traffic_brand(category: str, brand_list: list[str], cat_map: dict[str, list[str]]) -> str:
+    c = str(category or "").lower().replace("\n", " ")
+    for brand in brand_list:
+        if brand == "其它杂类":
+            continue
+        for kw in cat_map.get(brand, [brand.lower()]):
+            if kw in c:
+                return brand
+    return "其它杂类"
+
+
+def week_tm_traffic(
+    traffic_rows: list[TrafficRow], store: str, week_begin: date, week_end: date
+) -> list[TrafficRow]:
+    return [
+        t
+        for t in traffic_rows
+        if is_a05_traffic(t)
+        and t.add_date
+        and week_begin <= t.add_date <= week_end
+        and shop_to_store(t.shop or "") == store
+        and is_tm_inquiry_traffic(t)
+    ]
+
+
+def parse_a07_week_block(sheet_rows: list[list[Any]], week_labels: list[str]) -> list[list[Any]]:
+    labels = {lbl.replace(" ", "") for lbl in week_labels}
+    items: list[list[Any]] = []
+    started = False
+    for row in sheet_rows[3:]:
+        d0 = str(row[0] or "").strip()
+        d0c = d0.replace(" ", "")
+        if d0c in labels:
+            started = True
+            customer = str(row[3] if len(row) > 3 else "").strip()
+            if customer and customer not in ("无", "内容项", "客户名称"):
+                items.append(row)
+            continue
+        if started and d0 and d0c not in labels:
+            if d0.startswith("本周合计"):
+                break
+            break
+        if started:
+            customer = str(row[3] if len(row) > 3 else "").strip()
+            if customer and customer not in ("无", "内容项", "客户名称"):
+                items.append(row)
+    return items
+
+
+def load_a07_week_stats(a07_path: Path, week_labels: list[str]) -> dict[str, Any]:
+    empty = {
+        "intent_count": 0, "intent_new_count": 0, "intent_new_amount": 0.0,
+        "high_potential_count": 0, "intent_rows": [], "high_potential_rows": [],
+    }
+    if not a07_path.exists():
+        return empty
+    sheets = read_xlsx_rows(a07_path)
+    intent_sheet = next((sheets[k] for k in sheets if "意向" in k and "高潜" not in k), None)
+    hp_sheet = next((sheets[k] for k in sheets if "高潜" in k), None)
+    if not intent_sheet:
+        return empty
+    intent_rows = parse_a07_week_block(intent_sheet, week_labels)
+    hp_rows = parse_a07_week_block(hp_sheet, week_labels) if hp_sheet else []
+    new_rows = [r for r in intent_rows if str(r[5] if len(r) > 5 else "").strip() == "新"]
+    new_amt = sum(_float(r[9]) or 0 for r in new_rows)
+    return {
+        "intent_count": len(intent_rows),
+        "intent_new_count": len(new_rows),
+        "intent_new_amount": round(new_amt, 2),
+        "high_potential_count": len(hp_rows),
+        "intent_rows": intent_rows,
+        "high_potential_rows": hp_rows,
+    }
+
+
+def summarize_weekly_order_rows(rows: list[list[Any]]) -> tuple[int, float, float]:
+    """From WEEKLY_HEADERS rows: count, payment_rmb sum, gross sum."""
+    pay = gross = 0.0
+    for row in rows:
+        if len(row) > 8 and row[8] != "":
+            pay += float(row[8])
+        if len(row) > 16 and row[16] != "":
+            gross += float(row[16])
+    return len(rows), round(pay, 2), round(gross, 2)
+
+
+def _write_step3_brand_csv(
+    path: Path,
+    period: str,
+    brand_list: list[str],
+    counts: Counter,
+    inverter_in_brand: Counter,
+    total: int,
+    inverter_product_total: int,
+    include_inverter_product_row: bool,
+) -> None:
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["周期", period])
+        w.writerow(["周总流量合计", total])
+        w.writerow(["品牌/产品", "新客流量数量", "其中变频器", "品类流量占比", "备注"])
+        for brand in brand_list:
+            n = counts.get(brand, 0)
+            w.writerow([brand, n, inverter_in_brand.get(brand, 0), round(n / total, 6) if total else "", "按品牌"])
+        if include_inverter_product_row:
+            w.writerow([
+                "变频器", inverter_product_total, "", round(inverter_product_total / total, 6) if total else "",
+                "按产品汇总（非品牌）",
+            ])
+
+
+def generate_weekly_review_csvs(
+    out_dir: Path,
+    period: str,
+    week_begin: date,
+    week_end: date,
+    traffic_rows: list[TrafficRow],
+    youro_weekly_rows: list[list[Any]],
+    ronchamp_weekly_rows: list[list[Any]],
+    a07_path: Path,
+) -> list[Path]:
+    slug = period_slug(week_begin, week_end)
+    a07_labels = a07_week_label_candidates(week_begin, week_end, period)
+    a07 = load_a07_week_stats(a07_path, a07_labels)
+    written: list[Path] = []
+
+    for store, prefix, brand_list, cat_map, include_inv_row in (
+        (STORE_YOURO, "Youro", YOURO_BRAND_SHEET, YOURO_BRAND_CAT, True),
+        (STORE_RONCHAMP, "RonChamp", RONCHAMP_BRAND_SHEET, RONCHAMP_BRAND_CAT, True),
+    ):
+        tm_rows = week_tm_traffic(traffic_rows, store, week_begin, week_end)
+        total = len(tm_rows)
+        counts: Counter = Counter()
+        inv_in_brand: Counter = Counter()
+        for t in tm_rows:
+            brand = map_traffic_brand(t.category, brand_list, cat_map)
+            counts[brand] += 1
+            if is_inverter_category(t.category):
+                inv_in_brand[brand] += 1
+        inv_product = sum(1 for t in tm_rows if is_inverter_category(t.category))
+
+        brand_path = out_dir / f"Step3-{prefix}-周流量品牌-{slug}.csv"
+        _write_step3_brand_csv(
+            brand_path, period, brand_list, counts, inv_in_brand, total, inv_product, include_inv_row
+        )
+        written.append(brand_path)
+
+        other_rows = [t for t in tm_rows if map_traffic_brand(t.category, brand_list, cat_map) == "其它杂类"]
+        other_path = out_dir / f"Step3-{prefix}-其它杂类明细-{slug}.csv"
+        write_csv(
+            other_path,
+            ["sales", "customer", "country", "category", "traffic_type", "add_date", "level", "其中变频器"],
+            [
+                [
+                    t.sales, t.customer, str(t.country or "").replace("\n", ""),
+                    str(t.category or "").replace("\n", " "), t.traffic_type,
+                    t.add_date.isoformat() if t.add_date else "", t.level,
+                    "是" if is_inverter_category(t.category) else "",
+                ]
+                for t in sorted(other_rows, key=lambda x: (x.sales, x.customer))
+            ],
+        )
+        written.append(other_path)
+
+        countries: Counter = Counter()
+        for t in tm_rows:
+            c = str(t.country or "").replace("\n", "").strip()
+            if c:
+                countries[c] += 1
+        region_path = out_dir / f"Step3-{prefix}-新流量地区-{slug}.csv"
+        with region_path.open("w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(["周期", period])
+            w.writerow(["共几个国家", len(countries)])
+            w.writerow(["排名", "国家", "数量"])
+            for i, (country, cnt) in enumerate(countries.most_common(), 1):
+                w.writerow([i, country, cnt])
+        written.append(region_path)
+
+    for store, prefix, order_rows in (
+        (STORE_YOURO, "Youro", youro_weekly_rows),
+        (STORE_RONCHAMP, "RonChamp", ronchamp_weekly_rows),
+    ):
+        tm_rows = week_tm_traffic(traffic_rows, store, week_begin, week_end)
+        tm = len(tm_rows)
+        l1 = sum(1 for t in tm_rows if is_l1plus(t.level))
+        l3 = sum(1 for t in tm_rows if is_l3plus(t.level))
+        order_cnt, order_amt, order_gross = summarize_weekly_order_rows(order_rows)
+        a07_use = a07 if store == STORE_YOURO else {
+            "intent_count": "", "intent_new_count": "", "intent_new_amount": "",
+            "high_potential_count": "", "intent_rows": [], "high_potential_rows": [],
+        }
+        flow_path = out_dir / f"Step4-{prefix}-业务流程-{slug}.csv"
+        write_csv(
+            flow_path,
+            FLOW_ROW_HEADERS,
+            [[
+                period, tm, l1, round(l1 / tm, 6) if tm else "",
+                l3, round(l3 / tm, 6) if tm else "",
+                a07_use["high_potential_count"], a07_use["intent_count"],
+                a07_use["intent_new_count"], a07_use["intent_new_amount"],
+                order_cnt, order_amt, order_gross, "",
+            ]],
+        )
+        written.append(flow_path)
+
+    if a07["intent_rows"]:
+        intent_detail = out_dir / f"Step4-Youro-意向订单明细-{slug}.csv"
+        write_csv(
+            intent_detail,
+            ["sales", "customer", "country", "new_or_old", "level", "category", "amount_rmb"],
+            [
+                [
+                    str(r[2] if len(r) > 2 else ""),
+                    str(r[3] if len(r) > 3 else ""),
+                    str(r[4] if len(r) > 4 else ""),
+                    str(r[5] if len(r) > 5 else ""),
+                    str(r[6] if len(r) > 6 else ""),
+                    str(r[8] if len(r) > 8 else ""),
+                    r[9] if len(r) > 9 else "",
+                ]
+                for r in a07["intent_rows"]
+            ],
+        )
+        written.append(intent_detail)
+    if a07["high_potential_rows"]:
+        hp_detail = out_dir / f"Step4-Youro-高潜明细-{slug}.csv"
+        write_csv(
+            hp_detail,
+            ["sales", "customer", "country", "level", "category", "amount_rmb"],
+            [
+                [
+                    str(r[2] if len(r) > 2 else ""),
+                    str(r[3] if len(r) > 3 else ""),
+                    str(r[4] if len(r) > 4 else ""),
+                    str(r[5] if len(r) > 5 else ""),
+                    str(r[7] if len(r) > 7 else ""),
+                    r[8] if len(r) > 8 else "",
+                ]
+                for r in a07["high_potential_rows"]
+            ],
+        )
+        written.append(hp_detail)
+
+    return written
+
+
 def patch_weekly_xlsx(
     xlsx_path: Path,
     new_rows: list[list[Any]],
@@ -1623,6 +1928,23 @@ def main() -> int:
     print(f"  {out_dir / '4.周新客订单表-RonChamp.csv'} ({len(ronchamp_rows)} rows)")
     print(f"  {out_dir / '采购核对.csv'}")
     print(f"  {out_dir / '品牌复核.csv'}")
+
+    week_begin = parse_api_date(begin)
+    week_end = parse_api_date(end)
+    a07_path = data_dir / paths.get("a07", "A07-意向和高潜订单表.xlsx")
+    review_paths = generate_weekly_review_csvs(
+        out_dir,
+        period,
+        week_begin,
+        week_end,
+        traffic_rows,
+        youro_rows,
+        ronchamp_rows,
+        a07_path,
+    )
+    print("\nStep 3/4 review CSVs:")
+    for p in review_paths:
+        print(f"  {p}")
 
     if args.write_xlsx:
         youro_xlsx = paths.get("weekly_youro_xlsx") or paths.get("weekly_xlsx")
