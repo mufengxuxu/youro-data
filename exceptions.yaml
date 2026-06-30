@@ -11,8 +11,8 @@ conversion_channel_overrides:
     channel: tm
     reason: 周新客订单表流量来源 TM（Luck · FARVATH-k）；非转介绍
   - order_no: LU260617825
-    channel: rfq
-    reason: 周新客订单表流量来源 询盘（Luck · Rashell Gordon-k）；非转介绍
+    channel: tm
+    reason: 周新客订单表流量来源 询盘（Luck · Rashell Gordon-k）；询盘归 TM 类，非 RFQ
   - order_no: GR260610660
     channel: tm
     reason: 上级要求归 TM（Grace · Anis Abayou · 土耳其；A05 5月新流量表 TM/L3）
