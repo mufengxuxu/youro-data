@@ -20,12 +20,15 @@ cp config.example.yaml config.yaml
 |------|------|
 | `review/6.周新客订单表-Youro.csv` | 屿路当周首单（22 列） |
 | `review/4.周新客订单表-RonChamp.csv` | 镕川当周首单（22 列） |
-| `review/2.新客转化表.csv` | 月度新客转化汇总（需 `conversion` 配置） |
+| `review/2.新客转化表.csv` | **当月累计**新客转化（月初 ~ `week.end_date`） |
 | `review/采购核对.csv` | API vs A02 采购金额对比 |
 | `review/品牌复核.csv` | 品牌推断 + 置信度，供人工修正 |
-| Youro / Ronchamp 周分析 xlsx | 自动追加/替换同周期行（可选） |
 
-**店铺判定**：以 A02「所属店铺」（屿路 / 镕川）为准，写入对应周表 Sheet（Youro → 6.周新客订单表，RonChamp → 4.周新客订单表）。
+**默认只出 CSV**，周分析 xlsx 由人工粘贴更新。需要脚本写回 xlsx 时使用 `--write-xlsx`。
+
+**店铺判定**：以 A02「所属店铺」（屿路 / 镕川）为准，对应 Youro Sheet 6 / RonChamp Sheet 4。
+
+**转化表日期**：自动取 `week.end_date` 所在月的 **1 日 ~ week.end_date**（例：周次 6.22—6.28 → 转化表标题 `6.1 - 6.28`）。
 
 ## 数据流
 
@@ -43,7 +46,8 @@ cp config.example.yaml config.yaml
 ## 选项
 
 ```bash
-python generate_weekly_new_orders.py --no-xlsx        # 只出 CSV，不写回 xlsx
+python generate_weekly_new_orders.py                  # CSV + 转化表（默认）
+python generate_weekly_new_orders.py --write-xlsx     # 额外写回周分析 xlsx
 python generate_weekly_new_orders.py --no-conversion  # 跳过 2.新客转化表
 python generate_weekly_new_orders.py -c other.yaml
 ```

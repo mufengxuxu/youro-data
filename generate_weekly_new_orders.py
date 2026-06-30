@@ -731,6 +731,15 @@ def write_csv(path: Path, headers: list[str], rows: list[list[Any]]) -> None:
         w.writerows(rows)
 
 
+def write_conversion_csv(path: Path, title: str, rows: list[list[Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow([conversion_title_full(title)] + [""] * (len(CONVERSION_HEADERS) - 1))
+        w.writerow(CONVERSION_HEADERS)
+        w.writerows(rows)
+
+
 def write_review_csv(path: Path, headers: list[str], objects: list[Any]) -> None:
     rows = [[getattr(o, h) if hasattr(o, h) else o.get(h) for h in headers] for o in objects]
     write_csv(path, headers, rows)
@@ -823,6 +832,30 @@ def _margin_pct(gross: float | None, amount: float) -> float | str:
     return round(gross / amount, 4)
 
 
+def conversion_range(cfg: dict) -> tuple[date, date, str]:
+    """当月累计：月初（week.end_date 所在月 1 日）~ week.end_date。"""
+    conv = cfg.get("conversion") or {}
+    week_end = parse_api_date(cfg["week"]["end_date"])
+    month_begin = (
+        parse_api_date(conv["month_begin"])
+        if conv.get("month_begin")
+        else week_end.replace(day=1)
+    )
+    month_end = (
+        parse_api_date(conv["month_end"])
+        if conv.get("month_end")
+        else week_end
+    )
+    title = conv.get("title") or (
+        f"{month_begin.month}.{month_begin.day} - {month_end.month}.{month_end.day}"
+    )
+    return month_begin, month_end, title
+
+
+def conversion_title_full(title: str) -> str:
+    return f"Youro & RonChamp 业务员新客转化汇总（{title}）"
+
+
 def generate_conversion_table(
     month_sales: list[dict],
     a02_match: dict[tuple, A02OrderRow],
@@ -832,8 +865,7 @@ def generate_conversion_table(
     api: YouroApi,
 ) -> list[list[Any]]:
     conv = cfg.get("conversion") or {}
-    month_begin = parse_api_date(conv.get("month_begin", cfg["week"]["begin_date"][:8] + "01"))
-    month_end = parse_api_date(conv.get("month_end", cfg["week"]["end_date"]))
+    month_begin, month_end, _ = conversion_range(cfg)
     sales_map = cfg.get("sales_name_map", {})
 
     metrics: list[OrderMetrics] = []
@@ -966,7 +998,7 @@ def process_week_order(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate weekly new-customer order rows")
     parser.add_argument("-c", "--config", default="config.yaml")
-    parser.add_argument("--no-xlsx", action="store_true", help="Skip writing back to weekly xlsx")
+    parser.add_argument("--write-xlsx", action="store_true", help="Write back to weekly xlsx (default: CSV only)")
     parser.add_argument("--no-conversion", action="store_true", help="Skip monthly conversion table")
     args = parser.parse_args()
 
@@ -1038,7 +1070,7 @@ def main() -> int:
     print(f"  {out_dir / '采购核对.csv'}")
     print(f"  {out_dir / '品牌复核.csv'}")
 
-    if not args.no_xlsx:
+    if args.write_xlsx:
         youro_xlsx = paths.get("weekly_youro_xlsx") or paths.get("weekly_xlsx")
         if youro_xlsx:
             xlsx = data_dir / youro_xlsx
@@ -1054,17 +1086,16 @@ def main() -> int:
             else:
                 print(f"  Ronchamp weekly xlsx not found: {xlsx}")
 
-    if not args.no_conversion and cfg.get("conversion"):
-        conv = cfg["conversion"]
-        mb = conv.get("month_begin", begin[:8] + "01")
-        me = conv.get("month_end", end)
-        print(f"\nGenerating conversion table {mb} ~ {me}...")
+    if not args.no_conversion:
+        month_begin, month_end, title = conversion_range(cfg)
+        mb, me = month_begin.isoformat(), month_end.isoformat()
+        print(f"\nGenerating conversion table {conversion_title_full(title)}...")
         month_sales = api.list_sales_orders(mb, me)
         conversion_rows = generate_conversion_table(
             month_sales, a02_match, traffic_rows, brands, cfg, api
         )
-        write_csv(out_dir / "2.新客转化表.csv", CONVERSION_HEADERS, conversion_rows)
-        print(f"  {out_dir / '2.新客转化表.csv'} ({len(conversion_rows)} rows)")
+        write_conversion_csv(out_dir / "2.新客转化表.csv", title, conversion_rows)
+        print(f"  {out_dir / '2.新客转化表.csv'} ({len(conversion_rows)} rows, {mb} ~ {me})")
 
     return 0
 
