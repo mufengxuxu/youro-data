@@ -798,12 +798,226 @@ def _sales_sort_key(sales: str, order_list: list[str]) -> tuple[int, str]:
         return (len(order_list), sales)
 
 
+def _traffic_in_range(t: TrafficRow, store: str, sales: str, month_begin: date, month_end: date) -> bool:
+    shop = STORE_TO_SHOP.get(store, "")
+    if _norm(t.sales) != _norm(sales):
+        return False
+    if t.shop and shop_to_store(t.shop) != store and t.shop != shop:
+        return False
+    if not t.add_date or not (month_begin <= t.add_date <= month_end):
+        return False
+    return True
+
+
+def _traffic_row_key(t: TrafficRow) -> tuple[str, str]:
+    return (_norm(t.customer), t.add_date.isoformat() if t.add_date else "")
+
+
+@dataclass
+class TrafficCrossSummary:
+    store: str
+    sales: str
+    period: str
+    a05_count: int
+    a060x_count: int
+    overlap: int
+    a05_only: int
+    a060x_only: int
+    field_mismatch: int
+    diff: str
+    alert: str
+
+
+@dataclass
+class TrafficCrossDetail:
+    store: str
+    sales: str
+    customer: str
+    status: str
+    add_date_a05: str
+    add_date_a060x: str
+    level_a05: str
+    level_a060x: str
+    a05_file: str
+    a060x_file: str
+    alert: str
+
+
+def compare_traffic_cross(
+    traffic_rows: list[TrafficRow],
+    month_begin: date,
+    month_end: date,
+    sales_map: dict,
+) -> tuple[list[TrafficCrossSummary], list[TrafficCrossDetail]]:
+    """Cross-check A05 shop traffic vs A060x salesperson traffic for the same period."""
+    period = f"{month_begin.month}.{month_begin.day} - {month_end.month}.{month_end.day}"
+    summaries: list[TrafficCrossSummary] = []
+    details: list[TrafficCrossDetail] = []
+
+    pairs: set[tuple[str, str]] = set()
+    for t in traffic_rows:
+        if not t.add_date or not (month_begin <= t.add_date <= month_end):
+            continue
+        if not t.shop:
+            continue
+        store = shop_to_store(t.shop)
+        sales = normalize_sales(t.sales, sales_map)
+        if sales:
+            pairs.add((store, sales))
+
+    for store, sales in sorted(pairs):
+        a05 = [
+            t for t in traffic_rows
+            if t.file.startswith("A05") and _traffic_in_range(t, store, sales, month_begin, month_end)
+        ]
+        a060x = [
+            t for t in traffic_rows
+            if not t.file.startswith("A05") and _traffic_in_range(t, store, sales, month_begin, month_end)
+        ]
+        if not a05 and not a060x:
+            continue
+
+        a05_by_key = {_traffic_row_key(t): t for t in a05}
+        a060x_by_key = {_traffic_row_key(t): t for t in a060x}
+        overlap_keys = set(a05_by_key) & set(a060x_by_key)
+        a05_only_keys = set(a05_by_key) - overlap_keys
+        a060x_only_keys = set(a060x_by_key) - overlap_keys
+
+        field_mismatch = 0
+        alerts: list[str] = []
+
+        for key in sorted(overlap_keys):
+            ta, tb = a05_by_key[key], a060x_by_key[key]
+            la, lb = str(ta.level or "").strip(), str(tb.level or "").strip()
+            if la != lb:
+                field_mismatch += 1
+                details.append(
+                    TrafficCrossDetail(
+                        store=store_to_label(store),
+                        sales=sales,
+                        customer=ta.customer,
+                        status="字段不一致",
+                        add_date_a05=ta.add_date.isoformat() if ta.add_date else "",
+                        add_date_a060x=tb.add_date.isoformat() if tb.add_date else "",
+                        level_a05=la,
+                        level_a060x=lb,
+                        a05_file=ta.file,
+                        a060x_file=tb.file,
+                        alert=f"分级 A05={la or '-'} vs A060x={lb or '-'}",
+                    )
+                )
+
+        a05_cust_dates: dict[str, list[TrafficRow]] = {}
+        a060x_cust_dates: dict[str, list[TrafficRow]] = {}
+        for k in a05_only_keys:
+            c = a05_by_key[k].customer
+            a05_cust_dates.setdefault(_norm(c), []).append(a05_by_key[k])
+        for k in a060x_only_keys:
+            c = a060x_by_key[k].customer
+            a060x_cust_dates.setdefault(_norm(c), []).append(a060x_by_key[k])
+
+        for key in sorted(a05_only_keys):
+            ta = a05_by_key[key]
+            nc = _norm(ta.customer)
+            if nc in a060x_cust_dates:
+                tb = a060x_cust_dates[nc][0]
+                details.append(
+                    TrafficCrossDetail(
+                        store=store_to_label(store),
+                        sales=sales,
+                        customer=ta.customer,
+                        status="日期不一致",
+                        add_date_a05=ta.add_date.isoformat() if ta.add_date else "",
+                        add_date_a060x=tb.add_date.isoformat() if tb.add_date else "",
+                        level_a05=str(ta.level or ""),
+                        level_a060x=str(tb.level or ""),
+                        a05_file=ta.file,
+                        a060x_file=tb.file,
+                        alert="同客户两边都有，添加日期不同",
+                    )
+                )
+            else:
+                details.append(
+                    TrafficCrossDetail(
+                        store=store_to_label(store),
+                        sales=sales,
+                        customer=ta.customer,
+                        status="仅A05",
+                        add_date_a05=ta.add_date.isoformat() if ta.add_date else "",
+                        add_date_a060x="",
+                        level_a05=str(ta.level or ""),
+                        level_a060x="",
+                        a05_file=ta.file,
+                        a060x_file="",
+                        alert="A060x 无此客户",
+                    )
+                )
+
+        for key in sorted(a060x_only_keys):
+            tb = a060x_by_key[key]
+            nc = _norm(tb.customer)
+            if nc in a05_cust_dates:
+                continue  # already reported as 日期不一致 from A05 side
+            details.append(
+                TrafficCrossDetail(
+                    store=store_to_label(store),
+                    sales=sales,
+                    customer=tb.customer,
+                    status="仅A060x",
+                    add_date_a05="",
+                    add_date_a060x=tb.add_date.isoformat() if tb.add_date else "",
+                    level_a05="",
+                    level_a060x=str(tb.level or ""),
+                    a05_file="",
+                    a060x_file=tb.file,
+                    alert="A05 无此客户",
+                )
+            )
+
+        a05_n, a060x_n = len(a05), len(a060x)
+        if a05_n != a060x_n:
+            alerts.append(f"数量 A05={a05_n} vs A060x={a060x_n}")
+        if a05_only_keys:
+            alerts.append(f"仅A05 {len(a05_only_keys)}条")
+        if a060x_only_keys:
+            alerts.append(f"仅A060x {len(a060x_only_keys)}条")
+        if field_mismatch:
+            alerts.append(f"重叠分级不一致 {field_mismatch}条")
+
+        if a05_n == a060x_n == len(overlap_keys) and not a05_only_keys and not a060x_only_keys and not field_mismatch:
+            diff = "一致"
+        elif not a05 or not a060x:
+            diff = "部分缺失"
+        else:
+            diff = "是"
+
+        summaries.append(
+            TrafficCrossSummary(
+                store=store_to_label(store),
+                sales=sales,
+                period=period,
+                a05_count=a05_n,
+                a060x_count=a060x_n,
+                overlap=len(overlap_keys),
+                a05_only=len(a05_only_keys),
+                a060x_only=len(a060x_only_keys),
+                field_mismatch=field_mismatch,
+                diff=diff,
+                alert="; ".join(alerts) if alerts else "",
+            )
+        )
+
+    return summaries, details
+
+
 def _count_traffic(
     traffic_rows: list[TrafficRow],
     store: str,
     sales: str,
     month_begin: date,
     month_end: date,
+    *,
+    a05_only: bool = False,
 ) -> tuple[int, int]:
     shop = STORE_TO_SHOP.get(store, "")
     ns = _norm(sales)
@@ -814,6 +1028,7 @@ def _count_traffic(
         and (not t.shop or t.shop == shop or shop_to_store(t.shop) == store)
         and t.add_date
         and month_begin <= t.add_date <= month_end
+        and (not a05_only or t.file.startswith("A05"))
     ]
     total = len(matched)
     l1plus = sum(1 for t in matched if is_l1plus(t.level))
@@ -893,6 +1108,8 @@ def generate_conversion_table(
     ):
         sales_names: set[str] = set()
         for t in traffic_rows:
+            if not t.file.startswith("A05"):
+                continue
             shop = t.shop or ""
             if shop_to_store(shop) == store and t.add_date and month_begin <= t.add_date <= month_end:
                 sales_names.add(normalize_sales(t.sales, sales_map))
@@ -904,7 +1121,7 @@ def generate_conversion_table(
         sorted_sales = sorted(sales_names, key=lambda s: _sales_sort_key(s, order_list))
         first_in_group = True
         for sales in sorted_sales:
-            d, e = _count_traffic(traffic_rows, store, sales, month_begin, month_end)
+            d, e = _count_traffic(traffic_rows, store, sales, month_begin, month_end, a05_only=True)
             tm = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "tm"]
             rfq = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "rfq"]
             other = [m for m in metrics if m.store == store and m.sales == sales and m.channel == "other"]
@@ -1096,6 +1313,31 @@ def main() -> int:
         )
         write_conversion_csv(out_dir / "2.新客转化表.csv", title, conversion_rows)
         print(f"  {out_dir / '2.新客转化表.csv'} ({len(conversion_rows)} rows, {mb} ~ {me})")
+
+        traffic_summaries, traffic_details = compare_traffic_cross(
+            traffic_rows, month_begin, month_end, cfg.get("sales_name_map", {})
+        )
+        write_review_csv(
+            out_dir / "流量交叉核对-汇总.csv",
+            [
+                "store", "sales", "period", "a05_count", "a060x_count", "overlap",
+                "a05_only", "a060x_only", "field_mismatch", "diff", "alert",
+            ],
+            traffic_summaries,
+        )
+        write_review_csv(
+            out_dir / "流量交叉核对-明细.csv",
+            [
+                "store", "sales", "customer", "status", "add_date_a05", "add_date_a060x",
+                "level_a05", "level_a060x", "a05_file", "a060x_file", "alert",
+            ],
+            traffic_details,
+        )
+        print(f"  {out_dir / '流量交叉核对-汇总.csv'} ({len(traffic_summaries)} groups)")
+        print(f"  {out_dir / '流量交叉核对-明细.csv'} ({len(traffic_details)} discrepancies)")
+        for s in traffic_summaries:
+            if s.diff not in ("一致",):
+                print(f"    ⚠ 流量 {s.store}/{s.sales}: {s.diff} — {s.alert}")
 
     return 0
 
