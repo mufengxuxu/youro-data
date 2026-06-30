@@ -347,6 +347,49 @@ def load_a02_orders(a02_path: Path) -> dict[tuple, A02OrderRow]:
     return by_match
 
 
+MULTI_SHOP_A060X_PREFIXES = frozenset({"A0604", "A0607"})
+
+
+def build_a05_shop_index(traffic_rows: list[TrafficRow]) -> dict[tuple[str, str, str], str]:
+    """(sales, customer, add_date) -> 屿路/镕川 from A05 authoritative sheets."""
+    index: dict[tuple[str, str, str], str] = {}
+    for t in traffic_rows:
+        if not is_a05_traffic(t) or not t.add_date or not t.shop:
+            continue
+        key = (_norm(t.sales), _norm(t.customer), t.add_date.isoformat())
+        index[key] = t.shop
+    return index
+
+
+def infer_a060x_shop(
+    workbook_prefix: str,
+    sales: str,
+    customer: str,
+    add_date: date | None,
+    traffic_type: str,
+    a05_index: dict[tuple[str, str, str], str],
+    default_shop: str,
+) -> str:
+    """A0604 Grace / A0607 Lily 单表含 Youro+RonChamp，按 A05 对齐 + 类型兜底。"""
+    if add_date:
+        key = (_norm(sales), _norm(customer), add_date.isoformat())
+        if key in a05_index:
+            return a05_index[key]
+
+    tt = str(traffic_type or "").strip().upper()
+    if workbook_prefix == "A0604" or _norm(sales) == _norm("Grace"):
+        if tt == "R-TM" or "R-TM" in tt:
+            return "镕川"
+        if tt == "TM":
+            return "屿路"
+    if workbook_prefix == "A0607" or _norm(sales) == _norm("Lily"):
+        if tt in ("询盘", "RFQ"):
+            return "镕川"
+        if tt == "TM":
+            return "镕川"
+    return default_shop
+
+
 def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[TrafficRow]:
     rows_out: list[TrafficRow] = []
 
@@ -354,13 +397,17 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
         rows: list[list[Any]],
         workbook: str,
         sheet: str,
-        shop: str = "",
+        default_shop: str = "",
+        *,
+        a05_index: dict[tuple[str, str, str], str] | None = None,
+        workbook_prefix: str = "",
     ) -> None:
         if len(rows) < 3:
             return
         header = [str(x) for x in rows[1]]
         if "客户姓名" not in "".join(header) and "客户" not in "".join(header):
             return
+        multi_shop = workbook_prefix in MULTI_SHOP_A060X_PREFIXES
         for row in rows[2:]:
             if len(row) < 6:
                 continue
@@ -368,14 +415,22 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
             if not customer:
                 continue
             add_d = serial_to_date(row[5] if len(row) > 5 else None)
+            sales = str(row[1] if len(row) > 1 else "")
+            traffic_type = str(row[8] if len(row) > 8 else "")
+            if multi_shop and a05_index is not None:
+                shop = infer_a060x_shop(
+                    workbook_prefix, sales, customer, add_d, traffic_type, a05_index, default_shop
+                )
+            else:
+                shop = default_shop
             rows_out.append(
                 TrafficRow(
-                    sales=str(row[1] if len(row) > 1 else ""),
+                    sales=sales,
                     customer=customer,
                     country=str(row[4] if len(row) > 4 else ""),
                     add_date=add_d,
                     source=str(row[7] if len(row) > 7 else ""),
-                    traffic_type=str(row[8] if len(row) > 8 else ""),
+                    traffic_type=traffic_type,
                     category=str(row[9] if len(row) > 9 else ""),
                     level=str(row[6] if len(row) > 6 else ""),
                     shop=shop,
@@ -392,9 +447,13 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
             shop = "屿路" if "屿路" in name else "镕川" if "镕川" in name else ""
             parse_traffic_sheet(rows, a05_workbook, name, shop)
 
+    a05_index = build_a05_shop_index(rows_out)
+
     shop_from_file = {
-        "A0602": "屿路", "A0603": "屿路", "A0604": "屿路", "A0605": "屿路",
-        "A0601": "屿路", "A0606": "镕川", "A0607": "镕川",
+        "A0602": "屿路", "A0603": "屿路", "A0605": "屿路",
+        "A0601": "屿路", "A0606": "镕川",
+        # A0604 Grace / A0607 Lily：表内混 Youro+RonChamp，用 infer_a060x_shop
+        "A0604": "屿路", "A0607": "镕川",
     }
     for pattern in globs:
         for path in sorted(data_dir.glob(pattern)):
@@ -405,7 +464,14 @@ def load_traffic_rows(data_dir: Path, a05_path: Path, globs: list[str]) -> list[
             try:
                 for name, rows in read_xlsx_rows(path).items():
                     if "新流量" in name or name.strip() in ("新流量表",):
-                        parse_traffic_sheet(rows, path.name, name, default_shop)
+                        parse_traffic_sheet(
+                            rows,
+                            path.name,
+                            name,
+                            default_shop,
+                            a05_index=a05_index if prefix in MULTI_SHOP_A060X_PREFIXES else None,
+                            workbook_prefix=prefix,
+                        )
             except Exception as exc:
                 print(f"  warn: skip {path.name}: {exc}", file=sys.stderr)
 
