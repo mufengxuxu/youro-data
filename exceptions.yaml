@@ -14,8 +14,8 @@ conversion_channel_overrides:
     channel: other
     reason: 离职业务员转介（Luck · Rashell Gordon-k）
   - order_no: GR260610660
-    channel: other
-    reason: 表格登记前客户（Grace · Anis Abayou · 土耳其）
+    channel: tm
+    reason: 上级要求归 TM（Grace · Anis Abayou · 土耳其；A05 5月新流量表 TM/L3）
   - order_no: EN260621562
     channel: tm
     reason: 25/1/3 西门子电源模块流量（Ennerson · Adesola OWOSO）
