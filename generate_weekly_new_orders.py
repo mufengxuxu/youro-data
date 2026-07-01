@@ -1067,7 +1067,7 @@ RONCHAMP_BRAND_CAT = {
 FLOW_ROW_HEADERS = [
     "日期", "TM/询盘新流量", "L1+数量", "L1+占比率", "L3+数量", "L3+占比率",
     "高潜客户数量", "意向订单数量", "新客意向订单数", "新客意向订单金额",
-    "新客订单数量", "新客订单金额", "新客毛利润", "备注",
+    "新客订单数量", "新客订单金额", "备注",
 ]
 
 
@@ -1285,14 +1285,68 @@ def load_a07_week_stats(
 
 
 def summarize_weekly_order_rows(rows: list[list[Any]]) -> tuple[int, float, float]:
-    """From WEEKLY_HEADERS rows: count, payment_rmb sum, gross sum."""
-    pay = gross = 0.0
+    """Count, 新客订单金额（J列产品总金额人民币）合计, 毛利润合计。两店业务流程口径一致。"""
+    amt_idx = 9
+    amt = gross = 0.0
     for row in rows:
-        if len(row) > 8 and row[8] != "":
-            pay += float(row[8])
+        if len(row) > amt_idx and row[amt_idx] != "":
+            amt += float(row[amt_idx])
         if len(row) > 16 and row[16] != "":
             gross += float(row[16])
-    return len(rows), round(pay, 2), round(gross, 2)
+    return len(rows), round(amt, 2), round(gross, 2)
+
+
+def _brand_counts_from_a07_details(
+    details: list[dict[str, Any]],
+    brand_list: list[str],
+    cat_map: dict[str, list[str]],
+) -> Counter:
+    counts: Counter = Counter()
+    for d in details:
+        row = d["row"]
+        category = str(row[8] if len(row) > 8 else "").replace("\n", " ").strip()
+        if not category:
+            counts["（未填品类）"] += 1
+            continue
+        counts[map_traffic_brand(category, brand_list, cat_map)] += 1
+    return counts
+
+
+def format_a07_brand_remark(label: str, counts: Counter) -> str:
+    if not counts:
+        return ""
+    parts = [f"{brand}{cnt}个" for brand, cnt in counts.most_common()]
+    return f"{label}：" + "、".join(parts) + "。"
+
+
+def build_flow_remarks(
+    intent_details: list[dict[str, Any]],
+    hp_details: list[dict[str, Any]],
+    order_rows: list[list[Any]],
+    brand_list: list[str],
+    cat_map: dict[str, list[str]],
+) -> str:
+    """业务流程备注：意向/高潜品牌汇总 + 当周新客成交品牌。"""
+    chunks: list[str] = []
+    intent_remark = format_a07_brand_remark(
+        "意向订单", _brand_counts_from_a07_details(intent_details, brand_list, cat_map)
+    )
+    if intent_remark:
+        chunks.append(intent_remark)
+    hp_remark = format_a07_brand_remark(
+        "高潜", _brand_counts_from_a07_details(hp_details, brand_list, cat_map)
+    )
+    if hp_remark:
+        chunks.append(hp_remark)
+    deal_brands: Counter = Counter()
+    for row in order_rows:
+        deal = str(row[21] if len(row) > 21 else "").strip()
+        if deal.startswith("成交产品："):
+            deal_brands[deal.replace("成交产品：", "").strip()] += 1
+    if deal_brands:
+        parts = [f"{b}{n}个" for b, n in deal_brands.most_common()]
+        chunks.append("新客成交：" + "、".join(parts) + "。")
+    return " ".join(chunks)
 
 
 def _write_step3_brand_csv(
@@ -1387,16 +1441,19 @@ def generate_weekly_review_csvs(
                 w.writerow([i, country, cnt])
         written.append(region_path)
 
-    for store, prefix, order_rows in (
-        (STORE_YOURO, "Youro", youro_weekly_rows),
-        (STORE_RONCHAMP, "RonChamp", ronchamp_weekly_rows),
+    for store, prefix, order_rows, brand_list, cat_map in (
+        (STORE_YOURO, "Youro", youro_weekly_rows, YOURO_BRAND_SHEET, YOURO_BRAND_CAT),
+        (STORE_RONCHAMP, "RonChamp", ronchamp_weekly_rows, RONCHAMP_BRAND_SHEET, RONCHAMP_BRAND_CAT),
     ):
         tm_rows = week_tm_traffic(traffic_rows, store, week_begin, week_end)
         tm = len(tm_rows)
         l1 = sum(1 for t in tm_rows if is_l1plus(t.level))
         l3 = sum(1 for t in tm_rows if is_l3plus(t.level))
-        order_cnt, order_amt, order_gross = summarize_weekly_order_rows(order_rows)
+        order_cnt, order_amt, _order_gross = summarize_weekly_order_rows(order_rows)
         bs = a07["by_store"][store]
+        remarks = build_flow_remarks(
+            bs["intent_details"], bs["high_potential_details"], order_rows, brand_list, cat_map
+        )
         flow_path = out_dir / f"Step4-{prefix}-业务流程-{slug}.csv"
         write_csv(
             flow_path,
@@ -1406,10 +1463,20 @@ def generate_weekly_review_csvs(
                 l3, round(l3 / tm, 6) if tm else "",
                 bs["high_potential_count"], bs["intent_count"],
                 bs["intent_new_count"], bs["intent_new_amount"],
-                order_cnt, order_amt, order_gross, "",
+                order_cnt, order_amt, remarks,
             ]],
         )
         written.append(flow_path)
+
+        intent_brands = _brand_counts_from_a07_details(bs["intent_details"], brand_list, cat_map)
+        if intent_brands:
+            intent_br_path = out_dir / f"Step4-{prefix}-意向品牌汇总-{slug}.csv"
+            write_csv(
+                intent_br_path,
+                ["品牌/品类", "意向订单数"],
+                [[brand, cnt] for brand, cnt in intent_brands.most_common()],
+            )
+            written.append(intent_br_path)
 
     for store, prefix in ((STORE_YOURO, "Youro"), (STORE_RONCHAMP, "RonChamp")):
         bs = a07["by_store"][store]

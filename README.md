@@ -30,7 +30,8 @@ cp config.example.yaml config.yaml
 | `review/Step3-{Youro\|RonChamp}-周流量品牌-MMDD-MMDD.csv` | **步骤③** 品牌流量 + **其中变频器** + 产品汇总行「变频器」 |
 | `review/Step3-{Youro\|RonChamp}-其它杂类明细-MMDD-MMDD.csv` | 步骤③「其它杂类」逐条明细 |
 | `review/Step3-{Youro\|RonChamp}-新流量地区-MMDD-MMDD.csv` | 步骤③ 国家排名 |
-| `review/Step4-{Youro\|RonChamp}-业务流程-MMDD-MMDD.csv` | **步骤④** 业务流程单行（TM/L1+/L3+/新客订单 + A07 意向/高潜，按店拆分） |
+| `review/Step4-{Youro\|RonChamp}-业务流程-MMDD-MMDD.csv` | **步骤④** 业务流程单行（新客订单金额=**J列产品总金额**；含意向/高潜/成交品牌**备注**） |
+| `review/Step4-{Youro\|RonChamp}-意向品牌汇总-MMDD-MMDD.csv` | 步骤④ 当周意向订单品牌计数（辅助核对） |
 | `review/Step4-{Youro\|RonChamp}-意向订单明细-MMDD-MMDD.csv` | A07 当周意向订单明细（按 A05 推断店铺） |
 | `review/Step4-{Youro\|RonChamp}-高潜明细-MMDD-MMDD.csv` | A07 当周高潜订单明细（按 A05 推断店铺） |
 | `review/Step4-A07-店铺推断-MMDD-MMDD.csv` | A07 各行店铺归属及推断来源 |
@@ -51,7 +52,8 @@ cp config.example.yaml config.yaml
 2. `python generate_weekly_new_orders.py` → 出齐 `review/` 全部 CSV  
 3. 核对交叉核对 / 未归类 / 采购 / 品牌  
 4. 按 **[`docs/每周运营SOP.md`](docs/每周运营SOP.md)** 粘贴 Youro + RonChamp 两个 xlsx  
-5. RonChamp Sheet1 手填 **买家周注销账号**（常为 0）
+5. RonChamp Sheet1 手填 **买家周注销账号**（常为 0）  
+6. （可选）阅读当周 **[`docs/周运营分析-*.md`](docs/)** 运营诊断
 
 > **只跑脚本即可出数**；粘贴 xlsx 与注销账号仍需人工。
 
@@ -64,6 +66,7 @@ cp config.example.yaml config.yaml
    - **[`docs/业务规则汇总.md`](docs/业务规则汇总.md)** — 已确认业务规则总览（优先阅读）
    - [`docs/周新客订单表-字段映射方案.md`](docs/周新客订单表-字段映射方案.md)
    - [`docs/新客转化表-字段映射方案.md`](docs/新客转化表-字段映射方案.md)
+   - [`docs/周运营分析-2026-0622-0628-Youro-RonChamp.md`](docs/周运营分析-2026-0622-0628-Youro-RonChamp.md) — 当周双店运营诊断示例
 
 ## Cookie 更新
 

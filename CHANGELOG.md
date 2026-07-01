@@ -2,13 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- [`docs/周运营分析-2026-0622-0628-Youro-RonChamp.md`](docs/周运营分析-2026-0622-0628-Youro-RonChamp.md) — 6.22—6.28 双店周运营诊断
+
 ### Changed
 
 - **A07 新客意向拆店**：通过 A05 流量表匹配客户店铺，Step4/Step6 分别输出 Youro / RonChamp；新增 `Step4-A07-店铺推断-*.csv` 核对文件
 - **Luck 两单渠道修正**：`LU260605659`→TM、`LU260617825`→**TM**（询盘归 TM 类，非 RFQ）
 - **Grace/Lily 双店拆单**：有 A05 流量时以流量表店铺为准（如 Grace · derby kembo → RonChamp）
 - **Step3 地区 CSV**：新增 `周总流量合计`、`印孟巴合计`（印度+孟加拉国+巴基斯坦）；国家名合并（印尼/沙特/孟加拉别名）
-- **移除 xlsx 回写**：删除 `--write-xlsx`，周分析表一律人工粘贴 CSV
+- **Step4 业务流程**：新客订单金额统一 **J 列产品总金额**；备注含意向/高潜/新客成交品牌；**不含新客毛利润列**（毛利见 Step6）
 
 ## 2026-06-30
 
